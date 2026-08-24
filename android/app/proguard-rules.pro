@@ -1,0 +1,4 @@
+-keepattributes *Annotation*
+-keepclassmembers class **$$serializer { *; }
+-keep,includedescriptorclasses class dev.ironkeep.app.vault.model.**$$serializer { *; }
+-dontwarn org.bouncycastle.**

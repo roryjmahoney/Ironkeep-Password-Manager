@@ -1,0 +1,4 @@
+{
+  "extends": "../chromium/tsconfig.json",
+  "include": ["src", "vite.config.ts"]
+}

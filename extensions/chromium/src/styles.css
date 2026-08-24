@@ -1,0 +1,51 @@
+@import "tailwindcss";
+@source "../../../shared/extension-ui/src";
+
+@theme inline {
+  --font-sans: "Manrope Variable", sans-serif;
+  --font-display: "Newsreader Variable", serif;
+  --font-mono: "Cascadia Mono", "SFMono-Regular", monospace;
+  --color-background: var(--ik-background);
+  --color-foreground: var(--ik-foreground);
+  --color-muted-foreground: var(--ik-muted-foreground);
+  --color-field: var(--ik-field);
+  --color-subtle: var(--ik-subtle);
+  --color-line: var(--ik-line);
+  --color-brass: var(--ik-brass);
+  --color-brass-bright: var(--ik-brass-bright);
+  --color-iron: var(--ik-iron);
+  --color-danger: var(--ik-danger);
+  --color-ring: var(--ik-ring);
+}
+
+:root {
+  --ik-background: #111416;
+  --ik-foreground: #f3f0e7;
+  --ik-muted-foreground: #a6acae;
+  --ik-field: #171b1e;
+  --ik-subtle: #1d2226;
+  --ik-line: #30373b;
+  --ik-brass: #d1a85b;
+  --ik-brass-bright: #e0bc73;
+  --ik-iron: #151719;
+  --ik-danger: #c85d52;
+  --ik-ring: #e0bc73;
+  color-scheme: dark;
+  font-family: "Manrope Variable", sans-serif;
+  background: var(--ik-background);
+}
+
+* { box-sizing: border-box; }
+html, body, #root { width: 392px; min-height: 580px; margin: 0; }
+body { overflow-x: hidden; background: var(--ik-background); }
+button, input { font: inherit; }
+::selection { background: rgb(209 168 91 / 35%); color: var(--ik-foreground); }
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    scroll-behavior: auto !important;
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}

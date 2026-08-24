@@ -1,0 +1,55 @@
+{
+  "description": "Ironkeep v1 Android-extension interoperability vector",
+  "masterPassword": "correct horse battery staple",
+  "payload": {
+    "schemaVersion": 1,
+    "vaultId": "00000000-0000-4000-8000-000000000001",
+    "name": "Interoperability",
+    "revision": 7,
+    "updatedAt": "2026-08-23T00:00:00.000Z",
+    "writerDeviceId": "vector-device",
+    "items": [],
+    "categories": [],
+    "tags": [],
+    "tombstones": [],
+    "settings": {
+      "autoLockMinutes": 5,
+      "clearClipboardSeconds": 30,
+      "theme": "system",
+      "generator": {
+        "length": 20,
+        "lowercase": true,
+        "uppercase": true,
+        "digits": true,
+        "symbols": true,
+        "excludeAmbiguous": true,
+        "avoidRepeatingCharacters": false
+      }
+    }
+  },
+  "file": {
+    "format": "ironkeep-vault",
+    "fileVersion": 1,
+    "vaultId": "00000000-0000-4000-8000-000000000001",
+    "revision": 7,
+    "updatedAt": "2026-08-23T00:00:00.000Z",
+    "writerDeviceId": "vector-device",
+    "kdf": {
+      "algorithm": "argon2id",
+      "salt": "AAECAwQFBgcICQoLDA0ODw",
+      "memoryKiB": 19456,
+      "iterations": 2,
+      "parallelism": 1
+    },
+    "keyWrap": {
+      "algorithm": "aes-256-gcm",
+      "nonce": "QEFCQ0RFRkdISUpL",
+      "ciphertext": "cQi9WwzkauxbwZp-ZzraegZO7bPys_SlTrft0U7sMVMmA3Hpgz1fGwdKiZfjWhhm"
+    },
+    "payload": {
+      "algorithm": "aes-256-gcm",
+      "nonce": "YGFiY2RlZmdoaWpr",
+      "ciphertext": "mbbeyJu1FjSvIRXPfCUdW0g2tyA3bC2lf-7dSrXzgw1Qm0yzFPP9y2xMVXUGakI3ZPEPmfwjyVOKOoAXLvhvA9gnMQu7dtr-DboUacwTToOPN0CsD7sWn85Rj-3DrOw3n3WLr5CESIdUTfFxnStu--7Xh8RFbQl_1f1jwwYrnY198jBqjXoPdQc4qhD-v7uel0dNvT3uuhFl0zCxzfiB4IpOgCrzzoOoqJMEYd1H3B0DEoDRRhpz2GWHNWXkdxTNOQsmkpTmoXpK4B1Tn9vwBBYQnUXNykzeoToNN9LZJNUfmeHu9c2VuIkYcR6rLDFtHXHhrSB0HR61v6VCGhyfCJIhl0P4GeJjgcoegjAgOmkSmsvDdP3QaNomsB2yHpv1VhZrAZbDrJqQpMyF5zEH80PnmXbZzrncwxRB40uKBVMS4SKp647Bu93erJDkdgyIhb5AD8bUn7FGWN31GhkyQ8_NDdB57RuRYHv8TXy0_InhSZdBYtVzbn3dHBSI1jBv-t8M-bZCBXXtf0A5kwsZdtipMK09zWvZZO_rQ4FlgN5WOsY0jOhxpilhHMJ3twGbJpb6KZi18fqV7K_uWAIvlYAnSsLqGpCKxoLHBMBhfg3DDAsf0gbf"
+    }
+  }
+}

@@ -1,0 +1,46 @@
+# Editors and operating systems
+.idea/
+.vscode/
+*.iml
+.DS_Store
+Thumbs.db
+
+# JavaScript dependencies and output
+**/node_modules/
+**/dist/
+**/.vite/
+*.tsbuildinfo
+coverage/
+
+# Android/Gradle output and local machine configuration
+.gradle/
+**/build/
+android/local.properties
+android/captures/
+android/.kotlin/
+
+# Secrets and signing material
+.env
+.env.*
+!.env.example
+*.jks
+*.keystore
+*.p12
+*.pem
+*.key
+google-services.json
+
+# Release binaries. Publish these only through GitHub Releases.
+*.apk
+*.aab
+*.apks
+*.crx
+*.xpi
+*.zip
+artifacts/
+releases/
+
+# Test and tooling output
+*.log
+reports/
+.cache/

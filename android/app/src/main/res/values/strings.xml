@@ -1,0 +1,4 @@
+<resources>
+    <string name="app_name">Ironkeep</string>
+    <string name="autofill_service_name">Ironkeep Autofill</string>
+</resources>

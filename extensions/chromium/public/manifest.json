@@ -1,0 +1,26 @@
+{
+  "manifest_version": 3,
+  "name": "Ironkeep",
+  "version": "0.1.0",
+  "description": "Offline-first, zero-knowledge password manager.",
+  "action": { "default_popup": "popup.html", "default_title": "Open Ironkeep" },
+  "background": { "service_worker": "background.js", "type": "module" },
+  "permissions": ["activeTab", "clipboardWrite", "identity", "scripting", "storage"],
+  "optional_host_permissions": ["http://*/*", "https://*/*"],
+  "host_permissions": ["https://www.googleapis.com/*"],
+  "content_scripts": [
+    {
+      "matches": ["http://*/*", "https://*/*"],
+      "js": ["content.js"],
+      "run_at": "document_idle",
+      "all_frames": false
+    }
+  ],
+  "oauth2": {
+    "client_id": "REPLACE_WITH_CHROMIUM_OAUTH_CLIENT_ID.apps.googleusercontent.com",
+    "scopes": ["https://www.googleapis.com/auth/drive.appdata"]
+  },
+  "content_security_policy": {
+    "extension_pages": "script-src 'self' 'wasm-unsafe-eval'; object-src 'self'"
+  }
+}
