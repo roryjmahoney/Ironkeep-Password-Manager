@@ -30,7 +30,7 @@ Gradle or replace the wrapper with the machine's version.
 ## 2. Clone and install JavaScript dependencies
 
 ```powershell
-git clone https://github.com/YOUR_ORG/ironkeep.git
+git clone https://github.com/roryjmahoney/Ironkeep-Password-Manager.git
 Set-Location .\ironkeep
 npm ci
 ```
