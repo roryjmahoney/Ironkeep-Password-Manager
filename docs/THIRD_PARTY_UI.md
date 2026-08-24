@@ -14,9 +14,12 @@ Current 21st.dev lineage:
 - Origin UI tabs registry:
   `https://21st.dev/originui/tabs`
 
-Each imported component must be reviewed before commit for:
+License notices for the currently incorporated patterns, fonts, and libraries
+are recorded in [`../THIRD_PARTY_NOTICES.md`](../THIRD_PARTY_NOTICES.md).
 
-1. upstream license compatibility;
+Each future imported component must be reviewed before commit for:
+
+1. upstream license compatibility and notice requirements;
 2. dependency and bundle impact;
 3. keyboard, focus, reduced-motion, and 200% zoom behavior;
 4. removal of analytics, remote assets, demo data, and unrelated animation;

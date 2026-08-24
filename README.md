@@ -66,3 +66,16 @@ extension loading, OAuth registration, and release steps.
 Compiled APKs, extension packages, signing files, OAuth secrets, and generated
 build trees are excluded from Git. Release binaries belong only in GitHub
 Releases.
+
+## Security
+
+Ironkeep is pre-audit alpha software. Report vulnerabilities privately using
+the instructions in [`.github/SECURITY.md`](.github/SECURITY.md); do not post
+secrets, exploit details, or vulnerable vault files in a public issue.
+
+## License
+
+Ironkeep source code is licensed under the
+[GNU Affero General Public License v3.0 only](LICENSE). Third-party code, fonts,
+and assets remain under their respective licenses; see
+[`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md).
