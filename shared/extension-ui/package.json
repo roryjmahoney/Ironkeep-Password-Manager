@@ -8,6 +8,10 @@
     ".": {
       "types": "./src/index.ts",
       "import": "./dist/index.js"
+    },
+    "./content": {
+      "types": "./src/runtime/content.ts",
+      "import": "./dist/runtime/content.js"
     }
   },
   "scripts": {

@@ -1,3 +1,11 @@
-import { installContentScript } from "@ironkeep/extension-ui";
+import { installContentScript } from "@ironkeep/extension-ui/content";
 
-installContentScript();
+declare const chrome: {
+  runtime: {
+    onMessage: {
+      addListener(listener: (rawMessage: unknown) => void): void;
+    };
+  };
+};
+
+installContentScript((listener) => chrome.runtime.onMessage.addListener(listener));

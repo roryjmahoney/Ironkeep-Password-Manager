@@ -1,5 +1,3 @@
-import browser from "webextension-polyfill";
-
 interface FillMessage {
   type: "IRONKEEP_FILL";
   username: string;
@@ -31,8 +29,10 @@ function candidateInputs(): { username?: HTMLInputElement; password?: HTMLInputE
   return { ...(username ? { username } : {}), ...(password ? { password } : {}) };
 }
 
-export function installContentScript(): void {
-  browser.runtime.onMessage.addListener((rawMessage: unknown) => {
+type AddMessageListener = (listener: (rawMessage: unknown) => void) => void;
+
+export function installContentScript(addMessageListener: AddMessageListener): void {
+  addMessageListener((rawMessage: unknown) => {
     if (!rawMessage || typeof rawMessage !== "object" || !("type" in rawMessage) || rawMessage.type !== "IRONKEEP_FILL") return;
     const message = rawMessage as FillMessage;
     const { username, password } = candidateInputs();
