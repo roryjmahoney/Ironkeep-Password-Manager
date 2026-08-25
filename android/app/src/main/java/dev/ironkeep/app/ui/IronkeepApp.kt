@@ -37,6 +37,7 @@ import androidx.compose.material.icons.outlined.Key
 import androidx.compose.material.icons.outlined.Lock
 import androidx.compose.material.icons.outlined.Search
 import androidx.compose.material.icons.outlined.Save
+import androidx.compose.material.icons.outlined.Settings
 import androidx.compose.material.icons.outlined.Delete
 import androidx.compose.material.icons.outlined.ContentCopy
 import androidx.compose.material.icons.outlined.Timer
@@ -48,6 +49,8 @@ import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.NavigationBar
+import androidx.compose.material3.NavigationBarItem
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.RadioButton
@@ -278,6 +281,8 @@ private fun Wordmark() = Row(verticalAlignment = Alignment.CenterVertically) {
     }
 }
 
+private enum class VaultDestination { VAULT, SETTINGS }
+
 @Composable
 private fun VaultHome(
     vault: VaultPayload,
@@ -300,6 +305,7 @@ private fun VaultHome(
     var deleteTarget by remember { mutableStateOf<LoginItem?>(null) }
     var confirmDisableBiometric by remember { mutableStateOf(false) }
     var showSecuritySettings by remember { mutableStateOf(false) }
+    var destination by remember { mutableStateOf(VaultDestination.VAULT) }
     val logins = vault.items.filterIsInstance<LoginItem>().filter {
         query.isBlank() || it.title.contains(query, true) || it.username.contains(query, true)
     }
@@ -319,7 +325,25 @@ private fun VaultHome(
             onCopyPassword = onCopyPassword,
         )
     } else {
-    Scaffold(containerColor = MaterialTheme.colorScheme.background) { insets ->
+    Scaffold(
+        containerColor = MaterialTheme.colorScheme.background,
+        bottomBar = {
+            NavigationBar(containerColor = MaterialTheme.colorScheme.background) {
+                NavigationBarItem(
+                    selected = destination == VaultDestination.VAULT,
+                    onClick = { destination = VaultDestination.VAULT },
+                    icon = { Icon(Icons.Outlined.Key, contentDescription = null) },
+                    label = { Text("Vault") },
+                )
+                NavigationBarItem(
+                    selected = destination == VaultDestination.SETTINGS,
+                    onClick = { destination = VaultDestination.SETTINGS },
+                    icon = { Icon(Icons.Outlined.Settings, contentDescription = null) },
+                    label = { Text("Settings") },
+                )
+            }
+        },
+    ) { insets ->
         Column(Modifier.fillMaxSize().padding(insets)) {
             Row(Modifier.fillMaxWidth().height(72.dp).padding(horizontal = 20.dp), verticalAlignment = Alignment.CenterVertically) {
                 Wordmark()
@@ -327,102 +351,127 @@ private fun VaultHome(
                 IconButton(onClick = onLock) { Icon(Icons.Outlined.Lock, contentDescription = "Lock vault") }
             }
             HorizontalDivider(color = MaterialTheme.colorScheme.outline)
-            Row(
-                Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 12.dp),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                Icon(Icons.Outlined.Fingerprint, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
-                Column(Modifier.weight(1f).padding(horizontal = 12.dp)) {
-                    Text(if (biometricEnabled) "Biometric unlock enabled" else "Faster local unlock", style = MaterialTheme.typography.titleSmall)
-                    Text(
-                        if (biometricEnabled) "Protected by Android Keystore on this device." else "Require a strong biometric for every vault-key unwrap.",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                }
-                OutlinedButton(
-                    onClick = { if (biometricEnabled) confirmDisableBiometric = true else onEnableBiometric() },
-                    shape = RectangleShape,
-                    modifier = Modifier.height(48.dp),
-                ) { Text(if (biometricEnabled) "Disable" else "Enable") }
-            }
-            HorizontalDivider(color = MaterialTheme.colorScheme.outline)
-            Row(
-                Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 12.dp),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                Icon(Icons.Outlined.Timer, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
-                Column(Modifier.weight(1f).padding(horizontal = 12.dp)) {
-                    Text("Session safety", style = MaterialTheme.typography.titleSmall)
-                    Text(
-                        "Auto-lock ${vault.settings.autoLockMinutes} min · Clipboard ${vault.settings.clearClipboardSeconds} sec",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                }
-                OutlinedButton(
-                    onClick = { showSecuritySettings = true },
-                    shape = RectangleShape,
-                    modifier = Modifier.height(48.dp),
-                ) { Text("Change") }
-            }
-            HorizontalDivider(color = MaterialTheme.colorScheme.outline)
-            OutlinedTextField(
-                value = query,
-                onValueChange = { query = it },
-                modifier = Modifier.fillMaxWidth().padding(16.dp),
-                leadingIcon = { Icon(Icons.Outlined.Search, contentDescription = null) },
-                placeholder = { Text("Search passwords, notes, cards…") },
-                singleLine = true,
-                shape = RectangleShape,
-            )
             if (error != null) Text(error, color = MaterialTheme.colorScheme.error, modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp))
             if (notice != null) Text(notice, color = MaterialTheme.colorScheme.primary, modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp))
-            if (vault.items.filterIsInstance<LoginItem>().isEmpty()) {
-                Column(
-                    Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 40.dp),
-                    horizontalAlignment = Alignment.CenterHorizontally,
-                ) {
-                    HorizontalDivider(color = MaterialTheme.colorScheme.outline)
-                    Icon(Icons.Outlined.Key, contentDescription = null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.padding(top = 40.dp).size(34.dp))
-                    Text("Nothing in this drawer.", style = MaterialTheme.typography.headlineLarge, modifier = Modifier.padding(top = 16.dp).semantics { heading() })
-                    Text("Add the first login to this encrypted vault.", color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(top = 8.dp))
-                    OutlinedButton(onClick = { creating = true }, shape = RectangleShape, modifier = Modifier.padding(vertical = 24.dp).height(48.dp)) {
-                        Icon(Icons.Outlined.Add, contentDescription = null)
-                        Spacer(Modifier.size(8.dp))
-                        Text("Add first login")
-                    }
-                    HorizontalDivider(color = MaterialTheme.colorScheme.outline)
-                }
-            } else {
-                Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp), verticalAlignment = Alignment.CenterVertically) {
-                    Text("LOGINS", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.primary)
-                    Spacer(Modifier.weight(1f))
-                    Button(onClick = { creating = true }, shape = RectangleShape, modifier = Modifier.height(48.dp)) {
-                        Icon(Icons.Outlined.Add, contentDescription = null)
-                        Spacer(Modifier.size(8.dp))
-                        Text("Add login")
-                    }
-                }
-                LazyColumn(Modifier.weight(1f)) {
-                    items(logins, key = { it.id }) { login ->
-                        Row(
-                            Modifier.fillMaxWidth().clickable { editingId = login.id }.padding(horizontal = 20.dp, vertical = 12.dp),
-                            verticalAlignment = Alignment.CenterVertically,
+            when (destination) {
+                VaultDestination.VAULT -> {
+                    OutlinedTextField(
+                        value = query,
+                        onValueChange = { query = it },
+                        modifier = Modifier.fillMaxWidth().padding(16.dp),
+                        leadingIcon = { Icon(Icons.Outlined.Search, contentDescription = null) },
+                        placeholder = { Text("Search passwords, notes, cards…") },
+                        singleLine = true,
+                        shape = RectangleShape,
+                    )
+                    if (vault.items.filterIsInstance<LoginItem>().isEmpty()) {
+                        Column(
+                            Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 40.dp),
+                            horizontalAlignment = Alignment.CenterHorizontally,
                         ) {
-                            Box(Modifier.size(48.dp).border(1.dp, MaterialTheme.colorScheme.outline), contentAlignment = Alignment.Center) {
-                                Icon(Icons.Outlined.Key, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
+                            HorizontalDivider(color = MaterialTheme.colorScheme.outline)
+                            Icon(Icons.Outlined.Key, contentDescription = null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.padding(top = 40.dp).size(34.dp))
+                            Text("Nothing in this drawer.", style = MaterialTheme.typography.headlineLarge, modifier = Modifier.padding(top = 16.dp).semantics { heading() })
+                            Text("Add the first login to this encrypted vault.", color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(top = 8.dp))
+                            OutlinedButton(onClick = { creating = true }, shape = RectangleShape, modifier = Modifier.padding(vertical = 24.dp).height(48.dp)) {
+                                Icon(Icons.Outlined.Add, contentDescription = null)
+                                Spacer(Modifier.size(8.dp))
+                                Text("Add first login")
                             }
-                            Column(Modifier.weight(1f).padding(horizontal = 12.dp)) {
-                                Text(login.title, style = MaterialTheme.typography.titleMedium)
-                                Text(login.username.ifBlank { login.uris.firstOrNull() ?: "Login" }, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                            }
-                            IconButton(onClick = { onToggleFavorite(login.id) }, modifier = Modifier.size(48.dp)) {
-                                Icon(if (login.favorite) Icons.Outlined.Favorite else Icons.Outlined.FavoriteBorder, contentDescription = if (login.favorite) "Remove ${login.title} from favorites" else "Add ${login.title} to favorites")
+                            HorizontalDivider(color = MaterialTheme.colorScheme.outline)
+                        }
+                    } else {
+                        Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp), verticalAlignment = Alignment.CenterVertically) {
+                            Text("LOGINS", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.primary)
+                            Spacer(Modifier.weight(1f))
+                            Button(onClick = { creating = true }, shape = RectangleShape, modifier = Modifier.height(48.dp)) {
+                                Icon(Icons.Outlined.Add, contentDescription = null)
+                                Spacer(Modifier.size(8.dp))
+                                Text("Add login")
                             }
                         }
-                        HorizontalDivider(color = MaterialTheme.colorScheme.outline)
+                        LazyColumn(Modifier.weight(1f)) {
+                            items(logins, key = { it.id }) { login ->
+                                Row(
+                                    Modifier.fillMaxWidth().clickable { editingId = login.id }.padding(horizontal = 20.dp, vertical = 12.dp),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                ) {
+                                    Box(Modifier.size(48.dp).border(1.dp, MaterialTheme.colorScheme.outline), contentAlignment = Alignment.Center) {
+                                        Icon(Icons.Outlined.Key, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
+                                    }
+                                    Column(Modifier.weight(1f).padding(horizontal = 12.dp)) {
+                                        Text(login.title, style = MaterialTheme.typography.titleMedium)
+                                        Text(login.username.ifBlank { login.uris.firstOrNull() ?: "Login" }, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                    }
+                                    IconButton(onClick = { onToggleFavorite(login.id) }, modifier = Modifier.size(48.dp)) {
+                                        Icon(if (login.favorite) Icons.Outlined.Favorite else Icons.Outlined.FavoriteBorder, contentDescription = if (login.favorite) "Remove ${login.title} from favorites" else "Add ${login.title} to favorites")
+                                    }
+                                }
+                                HorizontalDivider(color = MaterialTheme.colorScheme.outline)
+                            }
+                        }
                     }
+                }
+
+                VaultDestination.SETTINGS -> Column(Modifier.weight(1f).verticalScroll(rememberScrollState())) {
+                    Text(
+                        "SETTINGS",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.primary,
+                        modifier = Modifier.padding(start = 20.dp, top = 24.dp),
+                    )
+                    Text(
+                        "Security & privacy",
+                        style = MaterialTheme.typography.headlineLarge,
+                        modifier = Modifier.padding(horizontal = 20.dp, vertical = 8.dp).semantics { heading() },
+                    )
+                    Text(
+                        "Local controls for this device and encrypted vault.",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.padding(start = 20.dp, end = 20.dp, bottom = 20.dp),
+                    )
+                    HorizontalDivider(color = MaterialTheme.colorScheme.outline)
+                    Row(
+                        Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 12.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Icon(Icons.Outlined.Fingerprint, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
+                        Column(Modifier.weight(1f).padding(horizontal = 12.dp)) {
+                            Text(if (biometricEnabled) "Biometric unlock enabled" else "Faster local unlock", style = MaterialTheme.typography.titleSmall)
+                            Text(
+                                if (biometricEnabled) "Protected by Android Keystore on this device." else "Require a strong biometric for every vault-key unwrap.",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                        }
+                        OutlinedButton(
+                            onClick = { if (biometricEnabled) confirmDisableBiometric = true else onEnableBiometric() },
+                            shape = RectangleShape,
+                            modifier = Modifier.height(48.dp),
+                        ) { Text(if (biometricEnabled) "Disable" else "Enable") }
+                    }
+                    HorizontalDivider(color = MaterialTheme.colorScheme.outline)
+                    Row(
+                        Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 12.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Icon(Icons.Outlined.Timer, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
+                        Column(Modifier.weight(1f).padding(horizontal = 12.dp)) {
+                            Text("Session safety", style = MaterialTheme.typography.titleSmall)
+                            Text(
+                                "Auto-lock ${vault.settings.autoLockMinutes} min · Clipboard ${vault.settings.clearClipboardSeconds} sec",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                        }
+                        OutlinedButton(
+                            onClick = { showSecuritySettings = true },
+                            shape = RectangleShape,
+                            modifier = Modifier.height(48.dp),
+                        ) { Text("Change") }
+                    }
+                    HorizontalDivider(color = MaterialTheme.colorScheme.outline)
                 }
             }
         }
