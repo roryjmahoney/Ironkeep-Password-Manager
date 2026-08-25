@@ -8,6 +8,7 @@ import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -18,14 +19,23 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.Add
 import androidx.compose.material.icons.outlined.Fingerprint
+import androidx.compose.material.icons.outlined.Favorite
+import androidx.compose.material.icons.outlined.FavoriteBorder
 import androidx.compose.material.icons.outlined.Key
 import androidx.compose.material.icons.outlined.Lock
 import androidx.compose.material.icons.outlined.Search
+import androidx.compose.material.icons.outlined.Save
+import androidx.compose.material.icons.outlined.Delete
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
@@ -54,7 +64,10 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import dev.ironkeep.app.vault.VaultUiState
 import dev.ironkeep.app.vault.VaultViewModel
+import dev.ironkeep.app.vault.model.LoginFields
+import dev.ironkeep.app.vault.model.LoginItem
 import dev.ironkeep.app.vault.model.VaultPayload
+import dev.ironkeep.app.vault.model.VaultMutations
 
 @Composable
 fun IronkeepApp(viewModel: VaultViewModel) {
@@ -69,7 +82,15 @@ fun IronkeepApp(viewModel: VaultViewModel) {
             VaultUiState.Setup -> GateScreen(creating = true, error = null, onSubmit = viewModel::create)
             VaultUiState.Locked -> GateScreen(creating = false, error = null, onSubmit = viewModel::unlock)
             is VaultUiState.Error -> GateScreen(creating = current.creating, error = current.message, onSubmit = if (current.creating) viewModel::create else viewModel::unlock)
-            is VaultUiState.Unlocked -> VaultHome(current.vault, onLock = viewModel::lock)
+            is VaultUiState.Unlocked -> VaultHome(
+                vault = current.vault,
+                error = current.error,
+                onAdd = viewModel::addLogin,
+                onEdit = viewModel::editLogin,
+                onDelete = viewModel::deleteLogin,
+                onToggleFavorite = viewModel::toggleLoginFavorite,
+                onLock = viewModel::lock,
+            )
         }
     }
 }
@@ -173,8 +194,37 @@ private fun Wordmark() = Row(verticalAlignment = Alignment.CenterVertically) {
 }
 
 @Composable
-private fun VaultHome(vault: VaultPayload, onLock: () -> Unit) {
+private fun VaultHome(
+    vault: VaultPayload,
+    error: String?,
+    onAdd: (LoginFields) -> Unit,
+    onEdit: (String, LoginFields) -> Unit,
+    onDelete: (String) -> Unit,
+    onToggleFavorite: (String) -> Unit,
+    onLock: () -> Unit,
+) {
     var query by remember { mutableStateOf("") }
+    var editingId by remember { mutableStateOf<String?>(null) }
+    var creating by remember { mutableStateOf(false) }
+    var deleteTarget by remember { mutableStateOf<LoginItem?>(null) }
+    val logins = vault.items.filterIsInstance<LoginItem>().filter {
+        query.isBlank() || it.title.contains(query, true) || it.username.contains(query, true)
+    }
+
+    val editing = vault.items.filterIsInstance<LoginItem>().find { it.id == editingId }
+    if (creating || editing != null) {
+        LoginForm(
+            vault = vault,
+            item = editing,
+            onCancel = { creating = false; editingId = null },
+            onSave = { fields ->
+                if (editing == null) onAdd(fields) else onEdit(editing.id, fields)
+                creating = false
+                editingId = null
+            },
+            onDelete = editing?.let { item -> { deleteTarget = item } },
+        )
+    } else {
     Scaffold(containerColor = MaterialTheme.colorScheme.background) { insets ->
         Column(Modifier.fillMaxSize().padding(insets)) {
             Row(Modifier.fillMaxWidth().height(72.dp).padding(horizontal = 20.dp), verticalAlignment = Alignment.CenterVertically) {
@@ -192,7 +242,8 @@ private fun VaultHome(vault: VaultPayload, onLock: () -> Unit) {
                 singleLine = true,
                 shape = RectangleShape,
             )
-            if (vault.items.isEmpty()) {
+            if (error != null) Text(error, color = MaterialTheme.colorScheme.error, modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp))
+            if (vault.items.filterIsInstance<LoginItem>().isEmpty()) {
                 Column(
                     Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 40.dp),
                     horizontalAlignment = Alignment.CenterHorizontally,
@@ -200,15 +251,141 @@ private fun VaultHome(vault: VaultPayload, onLock: () -> Unit) {
                     HorizontalDivider(color = MaterialTheme.colorScheme.outline)
                     Icon(Icons.Outlined.Key, contentDescription = null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.padding(top = 40.dp).size(34.dp))
                     Text("Nothing in this drawer.", style = MaterialTheme.typography.headlineLarge, modifier = Modifier.padding(top = 16.dp).semantics { heading() })
-                    Text("Add the first login, note, card, or identity.", color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(top = 8.dp))
-                    OutlinedButton(onClick = { }, shape = RectangleShape, modifier = Modifier.padding(vertical = 24.dp)) {
+                    Text("Add the first login to this encrypted vault.", color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(top = 8.dp))
+                    OutlinedButton(onClick = { creating = true }, shape = RectangleShape, modifier = Modifier.padding(vertical = 24.dp).height(48.dp)) {
                         Icon(Icons.Outlined.Add, contentDescription = null)
                         Spacer(Modifier.size(8.dp))
-                        Text("Add first item")
+                        Text("Add first login")
                     }
                     HorizontalDivider(color = MaterialTheme.colorScheme.outline)
                 }
+            } else {
+                Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp), verticalAlignment = Alignment.CenterVertically) {
+                    Text("LOGINS", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.primary)
+                    Spacer(Modifier.weight(1f))
+                    Button(onClick = { creating = true }, shape = RectangleShape, modifier = Modifier.height(48.dp)) {
+                        Icon(Icons.Outlined.Add, contentDescription = null)
+                        Spacer(Modifier.size(8.dp))
+                        Text("Add login")
+                    }
+                }
+                LazyColumn(Modifier.weight(1f)) {
+                    items(logins, key = { it.id }) { login ->
+                        Row(
+                            Modifier.fillMaxWidth().clickable { editingId = login.id }.padding(horizontal = 20.dp, vertical = 12.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Box(Modifier.size(48.dp).border(1.dp, MaterialTheme.colorScheme.outline), contentAlignment = Alignment.Center) {
+                                Icon(Icons.Outlined.Key, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
+                            }
+                            Column(Modifier.weight(1f).padding(horizontal = 12.dp)) {
+                                Text(login.title, style = MaterialTheme.typography.titleMedium)
+                                Text(login.username.ifBlank { login.uris.firstOrNull() ?: "Login" }, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            }
+                            IconButton(onClick = { onToggleFavorite(login.id) }, modifier = Modifier.size(48.dp)) {
+                                Icon(if (login.favorite) Icons.Outlined.Favorite else Icons.Outlined.FavoriteBorder, contentDescription = if (login.favorite) "Remove ${login.title} from favorites" else "Add ${login.title} to favorites")
+                            }
+                        }
+                        HorizontalDivider(color = MaterialTheme.colorScheme.outline)
+                    }
+                }
             }
         }
+    }
+    }
+
+    deleteTarget?.let { item ->
+        AlertDialog(
+            onDismissRequest = { deleteTarget = null },
+            title = { Text("Delete ${item.title}?") },
+            text = { Text("The login will be removed and a deletion tombstone will be encrypted into the vault.") },
+            confirmButton = {
+                Button(
+                    onClick = { onDelete(item.id); deleteTarget = null; creating = false; editingId = null },
+                    shape = RectangleShape,
+                    colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error, contentColor = MaterialTheme.colorScheme.onError),
+                ) {
+                    Icon(Icons.Outlined.Delete, contentDescription = null)
+                    Spacer(Modifier.size(8.dp))
+                    Text("Delete login")
+                }
+            },
+            dismissButton = { TextButton(onClick = { deleteTarget = null }) { Text("Cancel") } },
+        )
+    }
+}
+
+@Composable
+private fun LoginForm(
+    vault: VaultPayload,
+    item: LoginItem?,
+    onCancel: () -> Unit,
+    onSave: (LoginFields) -> Unit,
+    onDelete: (() -> Unit)?,
+) {
+    var title by remember(item?.id) { mutableStateOf(item?.title.orEmpty()) }
+    var username by remember(item?.id) { mutableStateOf(item?.username.orEmpty()) }
+    var password by remember(item?.id) { mutableStateOf(item?.password.orEmpty()) }
+    var uris by remember(item?.id) { mutableStateOf(item?.uris?.joinToString("\n").orEmpty()) }
+    var packages by remember(item?.id) { mutableStateOf(item?.androidPackageNames?.joinToString("\n").orEmpty()) }
+    var localError by remember { mutableStateOf<String?>(null) }
+    var duplicateFields by remember { mutableStateOf<LoginFields?>(null) }
+
+    fun fields() = LoginFields(title, username, password, uris.lines(), packages.lines())
+    fun submit() {
+        val values = fields()
+        if (values.title.isBlank() || values.password.isEmpty()) {
+            localError = "Title and password are required."
+            return
+        }
+        val duplicates = VaultMutations.likelyDuplicates(vault, values, item?.id)
+        if (duplicates.isNotEmpty()) duplicateFields = values else onSave(values)
+    }
+
+    Scaffold(containerColor = MaterialTheme.colorScheme.background) { insets ->
+        Column(Modifier.fillMaxSize().padding(insets).verticalScroll(rememberScrollState()).padding(20.dp)) {
+            Text("LOGIN RECORD", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.primary)
+            Text(if (item == null) "Add login" else "Edit login", style = MaterialTheme.typography.displaySmall, modifier = Modifier.padding(top = 8.dp).semantics { heading() })
+            Spacer(Modifier.height(24.dp))
+            OutlinedTextField(title, { title = it }, Modifier.fillMaxWidth(), label = { Text("Title") }, singleLine = true, shape = RectangleShape)
+            Spacer(Modifier.height(12.dp))
+            OutlinedTextField(username, { username = it }, Modifier.fillMaxWidth(), label = { Text("Username, email, or phone") }, singleLine = true, shape = RectangleShape)
+            Spacer(Modifier.height(12.dp))
+            OutlinedTextField(password, { password = it }, Modifier.fillMaxWidth(), label = { Text("Password") }, visualTransformation = PasswordVisualTransformation(), singleLine = true, shape = RectangleShape)
+            Spacer(Modifier.height(12.dp))
+            OutlinedTextField(uris, { uris = it }, Modifier.fillMaxWidth(), label = { Text("Website URIs · one per line") }, minLines = 2, shape = RectangleShape)
+            Spacer(Modifier.height(12.dp))
+            OutlinedTextField(packages, { packages = it }, Modifier.fillMaxWidth(), label = { Text("Android packages · one per line") }, minLines = 2, shape = RectangleShape)
+            Text(localError.orEmpty(), color = MaterialTheme.colorScheme.error, modifier = Modifier.height(36.dp).padding(top = 8.dp))
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                Button(onClick = ::submit, shape = RectangleShape, modifier = Modifier.height(48.dp)) {
+                    Icon(Icons.Outlined.Save, contentDescription = null)
+                    Spacer(Modifier.size(8.dp))
+                    Text("Save encrypted")
+                }
+                OutlinedButton(onClick = onCancel, shape = RectangleShape, modifier = Modifier.height(48.dp)) { Text("Cancel") }
+            }
+            if (onDelete != null) {
+                TextButton(
+                    onClick = onDelete,
+                    modifier = Modifier.padding(top = 16.dp).height(48.dp),
+                    colors = ButtonDefaults.textButtonColors(contentColor = MaterialTheme.colorScheme.error),
+                ) {
+                    Icon(Icons.Outlined.Delete, contentDescription = null)
+                    Spacer(Modifier.size(8.dp))
+                    Text("Delete login")
+                }
+            }
+        }
+    }
+
+    duplicateFields?.let { values ->
+        AlertDialog(
+            onDismissRequest = { duplicateFields = null },
+            title = { Text("Likely duplicate login") },
+            text = { Text("A login with this identifier and website or app already exists. Save another login anyway?") },
+            confirmButton = { Button(onClick = { duplicateFields = null; onSave(values) }, shape = RectangleShape) { Text("Save anyway") } },
+            dismissButton = { TextButton(onClick = { duplicateFields = null }) { Text("Review fields") } },
+        )
     }
 }

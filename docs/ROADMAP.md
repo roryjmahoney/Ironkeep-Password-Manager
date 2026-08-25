@@ -4,24 +4,68 @@ Ironkeep's MVP means a security-reviewable password manager, not a demo. Every
 MVP item needs tests and a complete locked/unlocked/error state before a public
 stable release.
 
-## Present starter scaffold
+## Current implementation
+
+### Completed in 0.2.0
+
+- Login create, edit, tombstone delete, and favorite toggle on Android,
+  Chromium, and Firefox.
+- Login fields for title, username/email/phone, password, website URIs, and
+  Android package names.
+- Shared mutation invariants for vault and item revisions, item timestamps,
+  `updatedAt`, `writerDeviceId`, unique item identifiers, and tombstones.
+- Likely-duplicate warnings based on matching identifiers, titles, exact website
+  origins, and Android package names.
+- Explicit destructive-delete confirmation in Android and extension UI.
+- Immediate unlocked-session updates after confirmed durable writes.
+- Persistence across lock, process/worker restart, and subsequent unlock.
+- Payload-only v1 re-encryption using the unlocked session data key. Normal
+  mutations do not retain the master password, replace the data key, or alter
+  the existing key wrap.
+- A fresh AES-GCM payload nonce for every save. The encrypted replacement is
+  written before the session adopts the new payload, so a failed write leaves
+  the previous encrypted vault and unlocked snapshot intact.
+- Active-site browser account selection and fill using exact-origin matching.
+  Android AutofillService matching remains limited to exact website domains or
+  explicitly stored Android package names.
+- A deterministic TypeScript-produced login-mutation vector that Kotlin and
+  TypeScript both decrypt as the same revision-8 v1 payload.
+- Tests covering add/edit/delete persistence, revision and timestamp changes,
+  fresh nonces, tombstones, failed writes, lock/restart/unlock persistence, and
+  Android/TypeScript compatibility.
+- Version metadata updated to `0.2.0` for the root workspace, shared packages,
+  Chromium and Firefox manifests, and Android app.
+
+### Earlier scaffold
 
 - Cross-platform v1 envelope contract, schema, Argon2id/AES-GCM implementations,
   hostile-parameter limits, unit tests, and a TypeScript-to-Kotlin test vector.
 - Typed models for logins, secure notes, credit cards, identities, categories,
   tags, favorites, settings, and tombstones.
 - CSPRNG password generator and local password-health analysis in shared code.
-- Shared React popup and MV3 background/content-script skeleton for Chromium and
-  Firefox.
+- Shared React popup and MV3 background/content-script foundation for Chromium
+  and Firefox.
 - Conditional Drive REST adapter for extensions; read/conditional-update adapter
   for Android.
 - Android atomic storage, Keystore primitive, AutofillService skeleton, custom
   Material 3 theme, and create/unlock/home state flow.
 - Build wrappers, ignore policy, documentation, and CI gates.
 
-This is intentionally marked pre-audit. Placeholder buttons, OAuth client IDs,
-biometric orchestration, CRUD screens, full importers, and conflict UI are not
-misrepresented as complete.
+### Known incomplete or placeholder behavior
+
+- The Android **Use biometric unlock** button currently does nothing. Biometric
+  enrollment, `BiometricPrompt.CryptoObject` orchestration, data-key unwrap,
+  invalidation handling, and tests are not implemented.
+- Google Drive buttons and OAuth client configuration remain placeholders.
+- Android `AutofillService.onSaveRequest` remains a no-op. Browser automatic
+  login capture and save/update prompts are not implemented.
+- CRUD is implemented only for login items. Secure notes, cards, identities,
+  categories, and tags do not yet have complete CRUD UI.
+- CSV import/export, onboarding, conflict UI, automatic lock orchestration,
+  master-password change, and vault deletion are not implemented.
+
+This remains a pre-audit build. Placeholder controls and incomplete flows must
+not be represented as production-ready.
 
 ## MVP — required before 1.0
 

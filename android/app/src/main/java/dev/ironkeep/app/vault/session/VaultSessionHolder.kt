@@ -14,6 +14,8 @@ object VaultSessionHolder {
 
     fun payloadOrNull(): VaultPayload? = session?.payload
 
+    fun sessionOrNull(): UnlockedVault? = session
+
     @Synchronized
     fun lock() {
         session?.close()

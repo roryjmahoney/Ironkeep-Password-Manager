@@ -68,6 +68,18 @@ Encrypt using the vault data key, a new independent 12-byte nonce, and a 128-bit
 tag. Never reuse a nonce with the same key. Each payload rewrite gets a fresh
 nonce, including retries after interrupted persistence.
 
+After unlock, a client may retain the decrypted data key only in its live
+unlocked session. A normal item mutation carries `kdf` and `keyWrap` forward
+verbatim, updates the duplicated payload/header metadata, and encrypts the new
+payload snapshot with that retained data key and a fresh payload nonce. It does
+not retain the master password, generate a replacement data key, or rewrap the
+existing data key. The key-wrap AAD contains only immutable vault identity and
+KDF fields, so this is fully compatible with existing v1 files.
+
+The encrypted replacement must be durably written before the in-memory session
+adopts the new payload. If encryption or persistence fails, the previous
+encrypted file and previous unlocked payload remain authoritative.
+
 JSON object key ordering in the outer file is not significant. AAD ordering is
 significant because it is defined as an array. Producers must use compact JSON
 with no spaces for AAD. Strings use normal JSON escaping and UTF-8.
@@ -119,3 +131,8 @@ deterministic interoperability vector. It deliberately uses the accepted test
 floor (19 MiB, 2 iterations, parallelism 1), not the production profile. Both
 TypeScript and Kotlin must decrypt it. Never copy its password, keys, salt, or
 nonces into production.
+
+[`shared/test-vectors/vault-v1-login-crud.json`](../shared/test-vectors/vault-v1-login-crud.json)
+extends that fixture with a TypeScript-produced login mutation and payload-only
+re-encryption. Kotlin and TypeScript both decrypt it to the same revision-8
+payload, proving that v1 key-wrap reuse remains interoperable.

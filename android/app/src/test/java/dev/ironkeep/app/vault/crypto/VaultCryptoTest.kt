@@ -24,6 +24,20 @@ class VaultCryptoTest {
     }
 
     @Test
+    fun decryptsSharedTypescriptLoginMutationVector() {
+        val crypto = VaultCrypto()
+        val vector = requireNotNull(javaClass.classLoader?.getResourceAsStream("vault-v1-login-crud.json"))
+            .bufferedReader()
+            .use { it.readText() }
+        val root = crypto.json.parseToJsonElement(vector).jsonObject
+        val file = crypto.json.decodeFromJsonElement<VaultFile>(requireNotNull(root["file"]))
+        val expected = crypto.json.decodeFromJsonElement<VaultPayload>(requireNotNull(root["payload"]))
+        val unlocked = crypto.unlock("correct horse battery staple".toCharArray(), file)
+        assertEquals(expected, unlocked.payload)
+        unlocked.close()
+    }
+
+    @Test
     fun roundTrip() {
         val crypto = VaultCrypto()
         val password = "correct horse battery staple".toCharArray()

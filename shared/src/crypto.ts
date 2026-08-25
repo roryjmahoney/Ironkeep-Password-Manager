@@ -49,8 +49,21 @@ export interface CreateVaultOptions {
   payloadNonce?: Uint8Array;
 }
 
+export interface EncryptPayloadOptions {
+  payloadNonce?: Uint8Array;
+}
+
+export interface EncryptedVaultSession {
+  file: VaultFile;
+  session: UnlockedVault;
+}
+
 function randomBytes(length: number): Uint8Array {
   return crypto.getRandomValues(new Uint8Array(length));
+}
+
+function sameBytes(left: Uint8Array, right: Uint8Array): boolean {
+  return left.length === right.length && left.every((value, index) => value === right[index]);
 }
 
 function toArrayBuffer(bytes: Uint8Array): ArrayBuffer {
@@ -210,14 +223,101 @@ function assertEnvelope(file: VaultFile): void {
   }
 }
 
-export async function encryptVault(
+function assertPayloadMetadata(payload: VaultPayload): void {
+  if (
+    payload.schemaVersion !== VAULT_SCHEMA_VERSION ||
+    !Number.isSafeInteger(payload.revision) ||
+    payload.revision < 1 ||
+    payload.vaultId.length < 1 ||
+    payload.vaultId.length > 128 ||
+    payload.writerDeviceId.length < 1 ||
+    payload.writerDeviceId.length > 128
+  ) {
+    throw new TypeError("Unsupported vault payload");
+  }
+}
+
+export class UnlockedVault {
+  #dataKey: Uint8Array;
+  #file: VaultFile;
+  #closed = false;
+  payload: VaultPayload;
+
+  constructor(payload: VaultPayload, dataKey: Uint8Array, file: VaultFile) {
+    this.payload = payload;
+    this.#dataKey = dataKey;
+    this.#file = file;
+  }
+
+  async encryptPayload(payload: VaultPayload, options: EncryptPayloadOptions = {}): Promise<VaultFile> {
+    if (this.#closed) throw new Error("Vault session is locked");
+    assertPayloadMetadata(payload);
+    if (payload.vaultId !== this.#file.vaultId) throw new TypeError("Vault identifier cannot change");
+
+    const previousNonce = base64UrlToBytes(this.#file.payload.nonce);
+    const payloadNonce = options.payloadNonce?.slice() ?? randomBytes(AES_GCM_NONCE_BYTES);
+    if (payloadNonce.length !== AES_GCM_NONCE_BYTES || sameBytes(payloadNonce, previousNonce)) {
+      payloadNonce.fill(0);
+      previousNonce.fill(0);
+      throw new RangeError("Payload nonce must be fresh and 12 bytes long");
+    }
+    previousNonce.fill(0);
+
+    const withoutPayload = {
+      format: this.#file.format,
+      fileVersion: this.#file.fileVersion,
+      vaultId: payload.vaultId,
+      revision: payload.revision,
+      updatedAt: payload.updatedAt,
+      writerDeviceId: payload.writerDeviceId,
+      kdf: this.#file.kdf,
+      keyWrap: this.#file.keyWrap,
+    };
+    const plaintext = encoder.encode(JSON.stringify(payload));
+    try {
+      const encryptedPayload = await aesEncrypt(this.#dataKey, plaintext, payloadNonce, payloadAad(withoutPayload));
+      return { ...withoutPayload, payload: encryptedBlob(payloadNonce, encryptedPayload) };
+    } finally {
+      plaintext.fill(0);
+      payloadNonce.fill(0);
+    }
+  }
+
+  commit(file: VaultFile, payload: VaultPayload): void {
+    if (this.#closed) throw new Error("Vault session is locked");
+    assertEnvelope(file);
+    if (
+      payload.vaultId !== file.vaultId ||
+      payload.revision !== file.revision ||
+      payload.updatedAt !== file.updatedAt ||
+      payload.writerDeviceId !== file.writerDeviceId ||
+      file.kdf.algorithm !== this.#file.kdf.algorithm ||
+      file.kdf.salt !== this.#file.kdf.salt ||
+      file.kdf.memoryKiB !== this.#file.kdf.memoryKiB ||
+      file.kdf.iterations !== this.#file.kdf.iterations ||
+      file.kdf.parallelism !== this.#file.kdf.parallelism ||
+      file.keyWrap.nonce !== this.#file.keyWrap.nonce ||
+      file.keyWrap.ciphertext !== this.#file.keyWrap.ciphertext
+    ) {
+      throw new TypeError("Committed vault metadata does not match");
+    }
+    this.#file = file;
+    this.payload = payload;
+  }
+
+  close(): void {
+    if (this.#closed) return;
+    this.#dataKey.fill(0);
+    this.#closed = true;
+  }
+}
+
+export async function createUnlockedVault(
   masterPassword: string,
   payload: VaultPayload,
   options: CreateVaultOptions = {},
-): Promise<VaultFile> {
-  if (payload.schemaVersion !== VAULT_SCHEMA_VERSION || payload.revision < 1) {
-    throw new TypeError("Unsupported vault payload");
-  }
+): Promise<EncryptedVaultSession> {
+  assertPayloadMetadata(payload);
 
   const requestedKdf = options.kdf ?? DEFAULT_KDF_PARAMETERS;
   validateKdf(requestedKdf);
@@ -258,7 +358,8 @@ export async function encryptVault(
     const plaintext = encoder.encode(JSON.stringify(payload));
     try {
       const encryptedPayload = await aesEncrypt(dataKey, plaintext, vaultNonce, payloadAad(withoutPayload));
-      return { ...withoutPayload, payload: encryptedBlob(vaultNonce, encryptedPayload) };
+      const file = { ...withoutPayload, payload: encryptedBlob(vaultNonce, encryptedPayload) };
+      return { file, session: new UnlockedVault(payload, dataKey.slice(), file) };
     } finally {
       plaintext.fill(0);
     }
@@ -271,7 +372,17 @@ export async function encryptVault(
   }
 }
 
-export async function decryptVault(masterPassword: string, file: VaultFile): Promise<VaultPayload> {
+export async function encryptVault(
+  masterPassword: string,
+  payload: VaultPayload,
+  options: CreateVaultOptions = {},
+): Promise<VaultFile> {
+  const result = await createUnlockedVault(masterPassword, payload, options);
+  result.session.close();
+  return result.file;
+}
+
+export async function unlockVault(masterPassword: string, file: VaultFile): Promise<UnlockedVault> {
   assertEnvelope(file);
   let keyEncryptionKey: Uint8Array | undefined;
   let dataKey: Uint8Array | undefined;
@@ -305,7 +416,9 @@ export async function decryptVault(masterPassword: string, file: VaultFile): Pro
     ) {
       throw new VaultAuthenticationError();
     }
-    return payload;
+    const session = new UnlockedVault(payload, dataKey, file);
+    dataKey = undefined;
+    return session;
   } catch (error) {
     if (error instanceof TypeError || error instanceof RangeError) {
       throw error;
@@ -316,6 +429,26 @@ export async function decryptVault(masterPassword: string, file: VaultFile): Pro
     dataKey?.fill(0);
     plaintext?.fill(0);
   }
+}
+
+export async function decryptVault(masterPassword: string, file: VaultFile): Promise<VaultPayload> {
+  const session = await unlockVault(masterPassword, file);
+  try {
+    return session.payload;
+  } finally {
+    session.close();
+  }
+}
+
+export async function persistVaultMutation(
+  session: UnlockedVault,
+  payload: VaultPayload,
+  write: (file: VaultFile) => Promise<void>,
+): Promise<VaultFile> {
+  const file = await session.encryptPayload(payload);
+  await write(file);
+  session.commit(file, payload);
+  return file;
 }
 
 export function serializeVaultFile(file: VaultFile): Uint8Array {

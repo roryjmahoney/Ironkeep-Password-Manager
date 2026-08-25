@@ -1,10 +1,25 @@
-import { createEmptyVault, decryptVault, encryptVault, type LoginItem, type VaultFile, type VaultPayload } from "@ironkeep/shared";
+import {
+  addLogin,
+  createEmptyVault,
+  createUnlockedVault,
+  deleteLogin,
+  editLogin,
+  findLikelyLoginDuplicates,
+  persistVaultMutation,
+  toggleLoginFavorite,
+  unlockVault,
+  type LoginFields,
+  type LoginItem,
+  type UnlockedVault,
+  type VaultFile,
+  type VaultItem,
+} from "@ironkeep/shared";
 import browser from "webextension-polyfill";
-import type { ExtensionRequest, ExtensionResponse, PublicVaultItem } from "./types.js";
+import type { ExtensionRequest, ExtensionResponse, PublicLogin, PublicVaultItem } from "./types.js";
 
 const STORAGE_KEY = "ironkeep.encryptedVault.v1";
 const DEVICE_KEY = "ironkeep.deviceId";
-let unlockedVault: VaultPayload | null = null;
+let unlockedVault: UnlockedVault | null = null;
 
 async function storedFile(): Promise<VaultFile | null> {
   const result = await browser.storage.local.get(STORAGE_KEY);
@@ -20,13 +35,42 @@ async function deviceId(): Promise<string> {
   return created;
 }
 
-function publicItem(item: VaultPayload["items"][number]): PublicVaultItem {
+function publicItem(item: VaultItem): PublicVaultItem {
   let subtitle: string = item.kind;
   if (item.kind === "login") subtitle = item.username || item.uris[0] || "Login";
   if (item.kind === "creditCard") subtitle = item.number ? `•••• ${item.number.slice(-4)}` : "Payment card";
   if (item.kind === "identity") subtitle = item.email || "Identity";
   if (item.kind === "secureNote") subtitle = "Secure note";
   return { id: item.id, kind: item.kind, title: item.title, subtitle, favorite: item.favorite };
+}
+
+function publicLogin(item: LoginItem): PublicLogin {
+  return {
+    ...publicItem(item),
+    kind: "login",
+    username: item.username,
+    password: item.password,
+    uris: [...item.uris],
+    androidPackageNames: [...item.androidPackageNames],
+  };
+}
+
+function validLoginFields(fields: LoginFields): boolean {
+  return typeof fields.title === "string" && typeof fields.username === "string" &&
+    typeof fields.password === "string" && Array.isArray(fields.uris) && fields.uris.every((value) => typeof value === "string") &&
+    Array.isArray(fields.androidPackageNames) && fields.androidPackageNames.every((value) => typeof value === "string");
+}
+
+async function persist(payload: UnlockedVault["payload"]): Promise<boolean> {
+  if (!unlockedVault) return false;
+  try {
+    await persistVaultMutation(unlockedVault, payload, async (file) => {
+      await browser.storage.local.set({ [STORAGE_KEY]: file });
+    });
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 function normalizeOrigin(value: string): string | null {
@@ -41,7 +85,7 @@ function normalizeOrigin(value: string): string | null {
 function matchingLogins(origin: string): LoginItem[] {
   const normalized = normalizeOrigin(origin);
   if (!normalized || !unlockedVault) return [];
-  return unlockedVault.items.filter((item): item is LoginItem =>
+  return unlockedVault.payload.items.filter((item): item is LoginItem =>
     item.kind === "login" && item.uris.some((uri) => normalizeOrigin(uri) === normalized),
   );
 }
@@ -61,16 +105,24 @@ async function handleRequest(request: ExtensionRequest): Promise<ExtensionRespon
       if (request.masterPassword.length < 12) return { ok: false, error: "INVALID_REQUEST" };
       if (await storedFile()) return { ok: false, error: "INVALID_REQUEST" };
       const payload = createEmptyVault("My Keep", await deviceId());
-      const file = await encryptVault(request.masterPassword, payload);
-      await browser.storage.local.set({ [STORAGE_KEY]: file });
-      unlockedVault = payload;
+      const created = await createUnlockedVault(request.masterPassword, payload);
+      try {
+        await browser.storage.local.set({ [STORAGE_KEY]: created.file });
+      } catch {
+        created.session.close();
+        return { ok: false, error: "PERSISTENCE_FAILED" };
+      }
+      unlockedVault?.close();
+      unlockedVault = created.session;
       return { ok: true, status: "unlocked" };
     }
     case "UNLOCK": {
       const file = await storedFile();
       if (!file) return { ok: false, error: "NOT_FOUND" };
       try {
-        unlockedVault = await decryptVault(request.masterPassword, file);
+        const session = await unlockVault(request.masterPassword, file);
+        unlockedVault?.close();
+        unlockedVault = session;
         return { ok: true, status: "unlocked" };
       } catch {
         unlockedVault = null;
@@ -78,12 +130,67 @@ async function handleRequest(request: ExtensionRequest): Promise<ExtensionRespon
       }
     }
     case "LOCK":
+      unlockedVault?.close();
       unlockedVault = null;
       return { ok: true, status: (await storedFile()) ? "locked" : "empty" };
     case "LIST_ITEMS":
       return unlockedVault
-        ? { ok: true, items: unlockedVault.items.map(publicItem) }
+        ? { ok: true, items: unlockedVault.payload.items.map(publicItem) }
         : { ok: false, error: "LOCKED" };
+    case "GET_LOGIN": {
+      const item = unlockedVault?.payload.items.find((candidate): candidate is LoginItem => candidate.kind === "login" && candidate.id === request.itemId);
+      return item ? { ok: true, item: publicLogin(item) } : { ok: false, error: unlockedVault ? "NOT_FOUND" : "LOCKED" };
+    }
+    case "CREATE_LOGIN": {
+      if (!unlockedVault) return { ok: false, error: "LOCKED" };
+      if (!validLoginFields(request.fields)) return { ok: false, error: "INVALID_REQUEST" };
+      const duplicates = findLikelyLoginDuplicates(unlockedVault.payload, request.fields);
+      if (duplicates.length && !request.confirmDuplicate) return { ok: false, error: "DUPLICATE", items: duplicates.map(publicItem) };
+      try {
+        const next = addLogin(unlockedVault.payload, request.fields, { deviceId: await deviceId() });
+        if (!await persist(next)) return { ok: false, error: "PERSISTENCE_FAILED" };
+        const item = next.items.at(-1);
+        if (!item || item.kind !== "login") return { ok: false, error: "INVALID_REQUEST" };
+        return { ok: true, item: publicLogin(item) };
+      } catch {
+        return { ok: false, error: "INVALID_REQUEST" };
+      }
+    }
+    case "UPDATE_LOGIN": {
+      if (!unlockedVault) return { ok: false, error: "LOCKED" };
+      if (!validLoginFields(request.fields)) return { ok: false, error: "INVALID_REQUEST" };
+      const duplicates = findLikelyLoginDuplicates(unlockedVault.payload, request.fields, request.itemId);
+      if (duplicates.length && !request.confirmDuplicate) return { ok: false, error: "DUPLICATE", items: duplicates.map(publicItem) };
+      try {
+        const next = editLogin(unlockedVault.payload, request.itemId, request.fields, { deviceId: await deviceId() });
+        if (!await persist(next)) return { ok: false, error: "PERSISTENCE_FAILED" };
+        const item = next.items.find((candidate): candidate is LoginItem => candidate.kind === "login" && candidate.id === request.itemId);
+        return item ? { ok: true, item: publicLogin(item) } : { ok: false, error: "NOT_FOUND" };
+      } catch (error) {
+        return { ok: false, error: error instanceof ReferenceError ? "NOT_FOUND" : "INVALID_REQUEST" };
+      }
+    }
+    case "DELETE_LOGIN": {
+      if (!unlockedVault) return { ok: false, error: "LOCKED" };
+      if (!request.confirmed) return { ok: false, error: "INVALID_REQUEST" };
+      try {
+        const next = deleteLogin(unlockedVault.payload, request.itemId, { deviceId: await deviceId() });
+        return await persist(next) ? { ok: true, status: "unlocked" } : { ok: false, error: "PERSISTENCE_FAILED" };
+      } catch {
+        return { ok: false, error: "NOT_FOUND" };
+      }
+    }
+    case "TOGGLE_LOGIN_FAVORITE": {
+      if (!unlockedVault) return { ok: false, error: "LOCKED" };
+      try {
+        const next = toggleLoginFavorite(unlockedVault.payload, request.itemId, { deviceId: await deviceId() });
+        if (!await persist(next)) return { ok: false, error: "PERSISTENCE_FAILED" };
+        const item = next.items.find((candidate): candidate is LoginItem => candidate.kind === "login" && candidate.id === request.itemId);
+        return item ? { ok: true, item: publicLogin(item) } : { ok: false, error: "NOT_FOUND" };
+      } catch {
+        return { ok: false, error: "NOT_FOUND" };
+      }
+    }
     case "GET_MATCHES": {
       if (!unlockedVault) return { ok: false, error: "LOCKED" };
       const origin = await originForTab(request.tabId);
@@ -92,7 +199,7 @@ async function handleRequest(request: ExtensionRequest): Promise<ExtensionRespon
         : { ok: false, error: "INVALID_REQUEST" };
     }
     case "FILL_ITEM": {
-      const item = unlockedVault?.items.find((candidate): candidate is LoginItem => candidate.kind === "login" && candidate.id === request.itemId);
+      const item = unlockedVault?.payload.items.find((candidate): candidate is LoginItem => candidate.kind === "login" && candidate.id === request.itemId);
       if (!item) return { ok: false, error: unlockedVault ? "NOT_FOUND" : "LOCKED" };
       const tabOrigin = await originForTab(request.tabId);
       if (!tabOrigin || !item.uris.some((uri) => normalizeOrigin(uri) === tabOrigin)) {

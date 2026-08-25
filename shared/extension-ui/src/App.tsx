@@ -8,18 +8,21 @@ import {
   KeyRound,
   LockKeyhole,
   Plus,
+  Save,
+  Trash2,
   RefreshCw,
   Settings,
   ShieldCheck,
   UserRound,
 } from "lucide-react";
-import { useDeferredValue, useEffect, useMemo, useRef, useState, type FormEvent } from "react";
+import { useCallback, useDeferredValue, useEffect, useMemo, useRef, useState, type FormEvent, type ReactNode } from "react";
 import browser from "webextension-polyfill";
 import { Button } from "./components/ui/Button.js";
+import { Input } from "./components/ui/Input.js";
 import { PasswordInput } from "./components/ui/PasswordInput.js";
 import { SearchInput } from "./components/ui/SearchInput.js";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "./components/ui/Tabs.js";
-import type { ExtensionRequest, ExtensionResponse, PublicVaultItem } from "./runtime/types.js";
+import type { ExtensionRequest, ExtensionResponse, PublicLogin, PublicVaultItem } from "./runtime/types.js";
 
 type ViewState = "loading" | "empty" | "locked" | "unlocked";
 
@@ -130,8 +133,108 @@ function GateView({ mode, onOpen }: { mode: "empty" | "locked"; onOpen: () => vo
   );
 }
 
-function VaultList({ items }: { items: PublicVaultItem[] }) {
+function FieldLabel({ label, children }: { label: string; children: ReactNode }) {
+  return <label className="block space-y-1.5 text-xs font-bold uppercase tracking-[0.12em] text-muted-foreground"><span>{label}</span>{children}</label>;
+}
+
+function SiteMatches({ refreshKey }: { refreshKey: number }) {
+  const [matches, setMatches] = useState<PublicVaultItem[]>([]);
+  const [tabId, setTabId] = useState<number | null>(null);
+  useEffect(() => {
+    void browser.tabs.query({ active: true, currentWindow: true }).then(async ([tab]) => {
+      if (typeof tab?.id !== "number") return;
+      setTabId(tab.id);
+      const response = await send({ type: "GET_MATCHES", tabId: tab.id });
+      setMatches(response.ok && "items" in response ? response.items : []);
+    });
+  }, [refreshKey]);
+  if (!matches.length || tabId === null) return null;
+  return (
+    <section className="border-b border-line bg-field px-4 py-3" aria-label="Logins for active site">
+      <p className="text-[10px] font-bold uppercase tracking-[0.16em] text-brass">Active site</p>
+      <div className="mt-2 flex flex-wrap gap-2">
+        {matches.map((item) => <Button key={item.id} size="compact" variant="outline" onClick={() => void send({ type: "FILL_ITEM", itemId: item.id, tabId })}>{item.title} · {item.subtitle}</Button>)}
+      </div>
+    </section>
+  );
+}
+
+function LoginEditor({ item, onCancel, onSaved }: { item: PublicLogin | null; onCancel: () => void; onSaved: () => void }) {
+  const [title, setTitle] = useState(item?.title ?? "");
+  const [username, setUsername] = useState(item?.username ?? "");
+  const [password, setPassword] = useState(item?.password ?? "");
+  const [uris, setUris] = useState(item?.uris.join("\n") ?? "");
+  const [packages, setPackages] = useState(item?.androidPackageNames.join("\n") ?? "");
+  const [error, setError] = useState("");
+  const [duplicateWarning, setDuplicateWarning] = useState("");
+  const [busy, setBusy] = useState(false);
+
+  async function save(confirmDuplicate = false) {
+    setError("");
+    setDuplicateWarning("");
+    if (!title.trim() || !password) {
+      setError("Title and password are required.");
+      return;
+    }
+    setBusy(true);
+    const fields = {
+      title,
+      username,
+      password,
+      uris: uris.split(/\r?\n/u),
+      androidPackageNames: packages.split(/\r?\n/u),
+    };
+    try {
+      const response = await send(item
+        ? { type: "UPDATE_LOGIN", itemId: item.id, fields, confirmDuplicate }
+        : { type: "CREATE_LOGIN", fields, confirmDuplicate });
+      if (response.ok) {
+        onSaved();
+      } else if (response.error === "DUPLICATE") {
+        setDuplicateWarning(`Likely duplicate: ${response.items.map((candidate) => candidate.title).join(", ")}.`);
+      } else {
+        setError(response.error === "PERSISTENCE_FAILED" ? "Encrypted vault could not be saved. Previous data is intact." : "Login could not be saved.");
+      }
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function remove() {
+    if (!item || !window.confirm(`Delete ${item.title}? This creates a sync tombstone.`)) return;
+    setBusy(true);
+    try {
+      const response = await send({ type: "DELETE_LOGIN", itemId: item.id, confirmed: true });
+      if (response.ok) onSaved();
+      else setError(response.error === "PERSISTENCE_FAILED" ? "Encrypted vault could not be saved. Previous data is intact." : "Login could not be deleted.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  const textareaClass = "min-h-20 w-full resize-y border border-line bg-field px-3 py-2 text-sm text-foreground outline-none focus:border-brass focus:ring-2 focus:ring-brass/20";
+  return (
+    <form className="space-y-4 px-5 py-5" onSubmit={(event) => { event.preventDefault(); void save(); }}>
+      <div><p className="text-[10px] font-bold uppercase tracking-[0.2em] text-brass">Login record</p><h2 className="mt-1 font-display text-3xl">{item ? "Edit login" : "Add login"}</h2></div>
+      <FieldLabel label="Title"><Input autoFocus value={title} onChange={(event) => setTitle(event.target.value)} /></FieldLabel>
+      <FieldLabel label="Username, email, or phone"><Input value={username} onChange={(event) => setUsername(event.target.value)} /></FieldLabel>
+      <PasswordInput label="Password" value={password} onChange={(event) => setPassword(event.target.value)} autoComplete="new-password" />
+      <FieldLabel label="Website URIs, one per line"><textarea className={textareaClass} value={uris} onChange={(event) => setUris(event.target.value)} placeholder="https://example.com" /></FieldLabel>
+      <FieldLabel label="Android packages, one per line"><textarea className={textareaClass} value={packages} onChange={(event) => setPackages(event.target.value)} placeholder="com.example.app" /></FieldLabel>
+      <div aria-live="polite" className="min-h-5 text-sm text-danger">{error || duplicateWarning}</div>
+      <div className="flex flex-wrap gap-2">
+        <Button type="submit" disabled={busy}><Save size={15} aria-hidden="true" />Save encrypted</Button>
+        {duplicateWarning ? <Button type="button" variant="outline" disabled={busy} onClick={() => void save(true)}>Save anyway</Button> : null}
+        <Button type="button" variant="ghost" onClick={onCancel}>Cancel</Button>
+        {item ? <Button className="text-danger" type="button" variant="ghost" disabled={busy} onClick={() => void remove()}><Trash2 size={15} aria-hidden="true" />Delete</Button> : null}
+      </div>
+    </form>
+  );
+}
+
+function VaultList({ items, onChanged }: { items: PublicVaultItem[]; onChanged: () => void }) {
   const [query, setQuery] = useState("");
+  const [editing, setEditing] = useState<PublicLogin | null | undefined>(undefined);
   const deferredQuery = useDeferredValue(query.trim().toLowerCase());
   const searchRef = useRef<HTMLInputElement>(null);
   const filtered = useMemo(
@@ -150,25 +253,44 @@ function VaultList({ items }: { items: PublicVaultItem[] }) {
     return () => window.removeEventListener("keydown", handleShortcut);
   }, []);
 
+  async function edit(item: PublicVaultItem) {
+    if (item.kind !== "login") return;
+    const response = await send({ type: "GET_LOGIN", itemId: item.id });
+    if (response.ok && "item" in response) setEditing(response.item);
+  }
+
+  async function toggle(item: PublicVaultItem) {
+    if (item.kind !== "login") return;
+    const response = await send({ type: "TOGGLE_LOGIN_FAVORITE", itemId: item.id });
+    if (response.ok) onChanged();
+  }
+
+  if (editing !== undefined) return <LoginEditor item={editing} onCancel={() => setEditing(undefined)} onSaved={() => { setEditing(undefined); onChanged(); }} />;
+
   return (
     <section aria-label="Vault items">
-      <div className="border-b border-line px-4 py-4">
-        <SearchInput ref={searchRef} value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search passwords, notes, cards…" />
+      <div className="flex gap-2 border-b border-line px-4 py-4">
+        <SearchInput ref={searchRef} value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search logins…" />
+        <Button size="icon" aria-label="Add login" onClick={() => setEditing(null)}><Plus size={17} aria-hidden="true" /></Button>
       </div>
       {filtered.length ? (
         <ul className="divide-y divide-line">
           {filtered.map((item) => (
             <li key={item.id}>
-              <button className="group grid w-full cursor-pointer grid-cols-[40px_1fr_36px] items-center gap-3 px-4 py-3 text-left outline-none transition-colors hover:bg-subtle focus-visible:bg-subtle focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring">
-                <span className="grid h-10 w-10 place-items-center border border-line bg-field text-brass">{itemIcon(item.kind)}</span>
-                <span className="min-w-0">
-                  <span className="block truncate text-sm font-semibold text-foreground">{item.title}</span>
-                  <span className="mt-0.5 block truncate text-xs text-muted-foreground">{item.subtitle}</span>
-                </span>
-                <span className="grid h-9 w-9 place-items-center text-muted-foreground group-hover:text-foreground">
-                  <Heart size={16} fill={item.favorite ? "currentColor" : "none"} aria-label={item.favorite ? "Favorite" : "Not favorite"} />
-                </span>
-              </button>
+              <div className="group grid w-full grid-cols-[1fr_48px] items-center transition-colors hover:bg-subtle">
+                <button onClick={() => void edit(item)} className="grid cursor-pointer grid-cols-[40px_1fr] items-center gap-3 px-4 py-3 text-left outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring">
+                  <span className="grid h-10 w-10 place-items-center border border-line bg-field text-brass">{itemIcon(item.kind)}</span>
+                  <span className="min-w-0">
+                    <span className="block truncate text-sm font-semibold text-foreground">{item.title}</span>
+                    <span className="mt-0.5 block truncate text-xs text-muted-foreground">{item.subtitle}</span>
+                  </span>
+                </button>
+                {item.kind === "login" ? (
+                  <button type="button" onClick={() => void toggle(item)} aria-label={item.favorite ? `Remove ${item.title} from favorites` : `Add ${item.title} to favorites`} className="grid h-12 w-12 place-items-center text-muted-foreground outline-none hover:text-foreground focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring">
+                    <Heart size={16} fill={item.favorite ? "currentColor" : "none"} aria-hidden="true" />
+                  </button>
+                ) : <span aria-hidden="true" />}
+              </div>
             </li>
           ))}
         </ul>
@@ -177,9 +299,9 @@ function VaultList({ items }: { items: PublicVaultItem[] }) {
           <KeyRound className="mx-auto text-brass" size={28} strokeWidth={1.5} aria-hidden="true" />
           <h2 className="mt-4 font-display text-2xl">Nothing in this drawer.</h2>
           <p className="mx-auto mt-2 max-w-[250px] text-sm leading-6 text-muted-foreground">
-            {items.length ? "No item matches this search." : "Add the first login, note, card, or identity."}
+            {items.length ? "No login matches this search." : "Add the first login to this encrypted vault."}
           </p>
-          {!items.length ? <Button className="mt-5" size="compact"><Plus size={15} aria-hidden="true" />Add first item</Button> : null}
+          {!items.length ? <Button className="mt-5" size="compact" onClick={() => setEditing(null)}><Plus size={15} aria-hidden="true" />Add first login</Button> : null}
         </div>
       )}
     </section>
@@ -247,12 +369,13 @@ function SettingsPanel() {
 
 function UnlockedView({ onLock }: { onLock: () => void }) {
   const [items, setItems] = useState<PublicVaultItem[]>([]);
+  const [refreshKey, setRefreshKey] = useState(0);
   useEffect(() => {
     void send({ type: "LIST_ITEMS" }).then((response) => {
       if (response.ok && "items" in response) setItems(response.items);
       else if (!response.ok && response.error === "LOCKED") onLock();
     });
-  }, [onLock]);
+  }, [onLock, refreshKey]);
 
   return (
     <main className="min-h-[580px] bg-background text-foreground">
@@ -268,7 +391,7 @@ function UnlockedView({ onLock }: { onLock: () => void }) {
           <TabsTrigger value="generator"><RefreshCw className="mr-1 inline" size={14} aria-hidden="true" />Generate</TabsTrigger>
           <TabsTrigger value="settings"><Settings className="mr-1 inline" size={14} aria-hidden="true" />Settings</TabsTrigger>
         </TabsList>
-        <TabsContent value="vault"><VaultList items={items} /></TabsContent>
+        <TabsContent value="vault"><SiteMatches refreshKey={refreshKey} /><VaultList items={items} onChanged={() => setRefreshKey((value) => value + 1)} /></TabsContent>
         <TabsContent value="generator"><Generator /></TabsContent>
         <TabsContent value="settings"><SettingsPanel /></TabsContent>
       </Tabs>
@@ -278,6 +401,7 @@ function UnlockedView({ onLock }: { onLock: () => void }) {
 
 export function App() {
   const [view, setView] = useState<ViewState>("loading");
+  const showLocked = useCallback(() => setView("locked"), []);
   useEffect(() => {
     void send({ type: "STATUS" }).then((response) => {
       setView(response.ok && "status" in response ? response.status : "locked");
@@ -285,5 +409,5 @@ export function App() {
   }, []);
   if (view === "loading") return <LoadingView />;
   if (view === "empty" || view === "locked") return <GateView mode={view} onOpen={() => setView("unlocked")} />;
-  return <UnlockedView onLock={() => setView("locked")} />;
+  return <UnlockedView onLock={showLocked} />;
 }

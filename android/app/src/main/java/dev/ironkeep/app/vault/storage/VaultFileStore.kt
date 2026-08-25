@@ -7,12 +7,18 @@ import dev.ironkeep.app.vault.model.VaultFile
 import kotlinx.serialization.json.Json
 import java.io.File
 
-class VaultFileStore(context: Context, private val json: Json) {
+interface VaultStore {
+    fun exists(): Boolean
+    fun read(): VaultFile
+    fun write(vault: VaultFile)
+}
+
+class VaultFileStore(context: Context, private val json: Json) : VaultStore {
     private val file = AtomicFile(File(context.filesDir, "vault.ikv"))
 
-    fun exists(): Boolean = file.baseFile.isFile
+    override fun exists(): Boolean = file.baseFile.isFile
 
-    fun read(): VaultFile {
+    override fun read(): VaultFile {
         val length = file.baseFile.length()
         if (length <= 0 || length > 64L * 1024 * 1024) throw VaultFormatException("Vault file size is invalid")
         val bytes = file.readFully()
@@ -23,7 +29,7 @@ class VaultFileStore(context: Context, private val json: Json) {
         }
     }
 
-    fun write(vault: VaultFile) {
+    override fun write(vault: VaultFile) {
         val bytes = json.encodeToString(VaultFile.serializer(), vault).encodeToByteArray()
         val stream = file.startWrite()
         try {

@@ -1,0 +1,74 @@
+{
+  "masterPassword": "correct horse battery staple",
+  "payload": {
+    "schemaVersion": 1,
+    "vaultId": "00000000-0000-4000-8000-000000000001",
+    "name": "Interoperability",
+    "revision": 8,
+    "updatedAt": "2026-08-24T00:00:00.000Z",
+    "writerDeviceId": "vector-device-two",
+    "items": [
+      {
+        "id": "00000000-0000-4000-8000-000000000101",
+        "kind": "login",
+        "title": "Ironkeep compatibility login",
+        "username": "vector@example.com",
+        "password": "vector-password-only",
+        "uris": [
+          "https://example.com/login"
+        ],
+        "androidPackageNames": [
+          "com.example.vector"
+        ],
+        "tagIds": [],
+        "favorite": false,
+        "createdAt": "2026-08-24T00:00:00.000Z",
+        "updatedAt": "2026-08-24T00:00:00.000Z",
+        "revision": 1,
+        "notes": ""
+      }
+    ],
+    "categories": [],
+    "tags": [],
+    "tombstones": [],
+    "settings": {
+      "autoLockMinutes": 5,
+      "clearClipboardSeconds": 30,
+      "theme": "system",
+      "generator": {
+        "length": 20,
+        "lowercase": true,
+        "uppercase": true,
+        "digits": true,
+        "symbols": true,
+        "excludeAmbiguous": true,
+        "avoidRepeatingCharacters": false
+      }
+    }
+  },
+  "file": {
+    "format": "ironkeep-vault",
+    "fileVersion": 1,
+    "vaultId": "00000000-0000-4000-8000-000000000001",
+    "revision": 8,
+    "updatedAt": "2026-08-24T00:00:00.000Z",
+    "writerDeviceId": "vector-device-two",
+    "kdf": {
+      "algorithm": "argon2id",
+      "salt": "AAECAwQFBgcICQoLDA0ODw",
+      "memoryKiB": 19456,
+      "iterations": 2,
+      "parallelism": 1
+    },
+    "keyWrap": {
+      "algorithm": "aes-256-gcm",
+      "nonce": "QEFCQ0RFRkdISUpL",
+      "ciphertext": "cQi9WwzkauxbwZp-ZzraegZO7bPys_SlTrft0U7sMVMmA3Hpgz1fGwdKiZfjWhhm"
+    },
+    "payload": {
+      "algorithm": "aes-256-gcm",
+      "nonce": "ISIjJCUmJygpKiss",
+      "ciphertext": "fFTfNurZa95q9sJtiTyeXISZc2Fn2LueLzYkBleu0AfBLaMXt47cw7W8Kyd1-Q-o6EV3-usHedJUOBMsOoTizM9-JjMs6ZoNSpJrXtWnLiL4_GmFRHgbhijtetxd7KXDz_-x_1cjcEAkH9TC49vgvbE0kumAPqj0r5zC4LQcIclKxC41UE-YequHJtY1R7LipIikict7gfjduDpfMfI_kA_b-u4av-1pQXDQ6IIfwIhqROBHAT-7F6y4ALTbPpSmIahZaQJs7T8_6_-lG--lZq-gs1ijbIzb79tdD4CGiqws9AIFYKcbuohdmJTByu5-3ls_WwD_xUOAvpqJPV9ERH-iFQgE2uXe0XN0jZ5az4i1rP5OpsyKKhJhyWiUBLSagHZWVEroe2bmsIG3GlwgU7wgkcotdEN7pK1xiDRLC6mtq5i0bXUwoPaWocENkRp_9J_ot0iJ2IzHS-mcgpSjDEU2LzPvyBQwlQtE38XgH-WaqY-xf--7hvf-RcKEx3FP4ILNyCZ0mNFkFqVbFkKs9BdE2gx1Ggjjs_lzekw3DQYR40k5Q0i6pG7ZZAI6zLtjd61NcAfiBS--1k0JuFkCkiwVEPCpTAPfVHuFl1SZ8XmE62_gsp8qdce7n0u1fHDkr2CaY2FegVbq1g3PkNTgyEpu_KJke8gNOWDT9YOcfEzcfg-l8fKdFTEp-TvouHVnQW45Nz-BnFP2AkSAX3HNxTz5wwPRsAtoxljhhoZTCAhzdKk7oaLcmsSzJTTCo6QqYU8Rv1GE49N3MExNtFBkFXKMUUouWfJqv1VpFwXoQJkVQxsDsVMssz_ysyZ61Dg9AOT7m1QstqPo7Z-7nomKfjLo50mFerL-q8-GCj-MVfbgkOIg5A_JW3KtkCeDm-_zj3hfc7w25kWNrW9B89JCs9pkh-LyTSr8ZmA1hcR6zWLy7K3UH8zUvRaF-Otoiw-4OSZ8gyMo-90_xhu1mj0EmbbGNWHlnsEDpgpbsIDhn3oBAA0lvBT5nTmSpREEijoM8TqNAkVJt_rgESX6PQ5VAdPagfTJhFefogygq_dtjXwqKjRmOlY6wIhkk36RE0fGwHY6eSBeKIsa-RMCIEJGXY3o_GYZ8WdMwGUk3VCXFTR0KE6UQw"
+    }
+  }
+}

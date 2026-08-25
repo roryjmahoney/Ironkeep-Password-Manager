@@ -105,6 +105,11 @@ vault revision, set `updatedAt`, set `writerDeviceId`, use a fresh payload nonce
 encrypt, and replace the local file atomically. Keep tombstones for deletes so a
 merge cannot resurrect removed items.
 
+Normal mutations reuse the live session data key and the existing v1 key wrap;
+they never require or retain the master password. The persisted encrypted
+replacement is committed before the session publishes the new payload, so a
+failed write leaves both durable and in-memory state on the previous revision.
+
 ## Optional Google Drive lifecycle
 
 One file named `ironkeep-vault.ikv` is created in Drive's hidden

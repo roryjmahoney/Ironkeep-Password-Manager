@@ -6,13 +6,18 @@ import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import dev.ironkeep.app.vault.crypto.VaultAuthenticationException
 import dev.ironkeep.app.vault.crypto.VaultCrypto
+import dev.ironkeep.app.vault.model.LoginFields
 import dev.ironkeep.app.vault.model.VaultPayload
+import dev.ironkeep.app.vault.model.VaultMutations
+import dev.ironkeep.app.vault.session.VaultPersistence
 import dev.ironkeep.app.vault.session.VaultSessionHolder
 import dev.ironkeep.app.vault.storage.VaultFileStore
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
@@ -20,13 +25,15 @@ sealed interface VaultUiState {
     data object Loading : VaultUiState
     data object Setup : VaultUiState
     data object Locked : VaultUiState
-    data class Unlocked(val vault: VaultPayload) : VaultUiState
+    data class Unlocked(val vault: VaultPayload, val error: String? = null) : VaultUiState
     data class Error(val creating: Boolean, val message: String) : VaultUiState
 }
 
 class VaultViewModel(application: Application) : AndroidViewModel(application) {
     private val crypto = VaultCrypto()
     private val store = VaultFileStore(application, crypto.json)
+    private val persistence = VaultPersistence(crypto, store)
+    private val mutationMutex = Mutex()
     private val mutableState = MutableStateFlow<VaultUiState>(VaultUiState.Loading)
     val state: StateFlow<VaultUiState> = mutableState.asStateFlow()
 
@@ -46,7 +53,12 @@ class VaultViewModel(application: Application) : AndroidViewModel(application) {
                 val result = withContext(Dispatchers.Default) {
                     crypto.encryptNew(masterPassword, VaultPayload.empty("My Keep", deviceId()))
                 }
-                withContext(Dispatchers.IO) { store.write(result.file) }
+                try {
+                    withContext(Dispatchers.IO) { store.write(result.file) }
+                } catch (error: Exception) {
+                    result.session.close()
+                    throw error
+                }
                 VaultSessionHolder.replace(result.session)
                 mutableState.value = VaultUiState.Unlocked(result.session.payload)
             } catch (_: Exception) {
@@ -78,6 +90,34 @@ class VaultViewModel(application: Application) : AndroidViewModel(application) {
     fun lock() {
         VaultSessionHolder.lock()
         mutableState.value = VaultUiState.Locked
+    }
+
+    fun addLogin(fields: LoginFields) = mutate { payload -> VaultMutations.addLogin(payload, fields, deviceId()) }
+
+    fun editLogin(itemId: String, fields: LoginFields) = mutate { payload -> VaultMutations.editLogin(payload, itemId, fields, deviceId()) }
+
+    fun deleteLogin(itemId: String) = mutate { payload -> VaultMutations.deleteLogin(payload, itemId, deviceId()) }
+
+    fun toggleLoginFavorite(itemId: String) = mutate { payload -> VaultMutations.toggleFavorite(payload, itemId, deviceId()) }
+
+    private fun mutate(transform: (VaultPayload) -> VaultPayload) {
+        viewModelScope.launch {
+            mutationMutex.withLock {
+                val session = VaultSessionHolder.sessionOrNull()
+                if (session == null) {
+                    mutableState.value = VaultUiState.Locked
+                    return@withLock
+                }
+                val previous = session.payload
+                try {
+                    val next = withContext(Dispatchers.Default) { transform(previous) }
+                    withContext(Dispatchers.IO) { persistence.persist(session, next) }
+                    mutableState.value = VaultUiState.Unlocked(next)
+                } catch (_: Exception) {
+                    mutableState.value = VaultUiState.Unlocked(previous, "Encrypted vault could not be saved. Previous data is intact.")
+                }
+            }
+        }
     }
 
     override fun onCleared() {

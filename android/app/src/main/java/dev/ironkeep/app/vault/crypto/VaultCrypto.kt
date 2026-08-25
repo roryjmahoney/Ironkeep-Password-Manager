@@ -27,10 +27,31 @@ class VaultFormatException(message: String) : IllegalArgumentException(message)
 data class KdfProfile(val memoryKiB: Int = 64 * 1024, val iterations: Int = 3, val parallelism: Int = 4)
 
 class UnlockedVault internal constructor(
-    val payload: VaultPayload,
+    payload: VaultPayload,
     internal val dataKey: ByteArray,
+    file: VaultFile,
 ) : AutoCloseable {
-    override fun close() = dataKey.fill(0)
+    @Volatile var payload: VaultPayload = payload
+        private set
+    @Volatile var file: VaultFile = file
+        private set
+    private var closed = false
+
+    internal fun requireOpen() = check(!closed) { "Vault session is locked" }
+
+    internal fun commit(file: VaultFile, payload: VaultPayload) {
+        requireOpen()
+        require(file.vaultId == payload.vaultId && file.revision == payload.revision && file.updatedAt == payload.updatedAt && file.writerDeviceId == payload.writerDeviceId)
+        require(file.kdf == this.file.kdf && file.keyWrap == this.file.keyWrap) { "Key derivation and wrap cannot change during a payload mutation" }
+        this.file = file
+        this.payload = payload
+    }
+
+    override fun close() {
+        if (closed) return
+        dataKey.fill(0)
+        closed = true
+    }
 }
 
 data class EncryptedVaultResult(val file: VaultFile, val session: UnlockedVault)
@@ -82,7 +103,7 @@ class VaultCrypto(
                 ciphertext = encode(aesGcmEncrypt(dataKey, plaintext, payloadNonce, payloadAad(partial, keyWrap))),
             )
             val file = partial.toVaultFile(keyWrap, payloadBlob)
-            return EncryptedVaultResult(file, UnlockedVault(payload, dataKey))
+            return EncryptedVaultResult(file, UnlockedVault(payload, dataKey, file))
         } catch (error: Exception) {
             dataKey.fill(0)
             throw error
@@ -112,7 +133,7 @@ class VaultCrypto(
                 payload.revision != file.revision || payload.updatedAt != file.updatedAt ||
                 payload.writerDeviceId != file.writerDeviceId
             ) throw VaultAuthenticationException()
-            return UnlockedVault(payload, dataKey).also { dataKey = null }
+            return UnlockedVault(payload, dataKey, file).also { dataKey = null }
         } catch (error: VaultFormatException) {
             throw error
         } catch (_: Exception) {
@@ -122,6 +143,29 @@ class VaultCrypto(
             dataKey?.fill(0)
             plaintext?.fill(0)
             masterPassword.fill('\u0000')
+        }
+    }
+
+    fun encryptUpdated(session: UnlockedVault, payload: VaultPayload, requestedNonce: ByteArray? = null): VaultFile {
+        session.requireOpen()
+        require(payload.schemaVersion == VAULT_SCHEMA_VERSION && payload.vaultId == session.file.vaultId && payload.revision > 0)
+        val payloadNonce = requestedNonce?.copyOf() ?: randomBytes(NONCE_BYTES)
+        require(payloadNonce.size == NONCE_BYTES && !payloadNonce.contentEquals(decode(session.file.payload.nonce))) {
+            payloadNonce.fill(0)
+            "Payload nonce must be fresh and 12 bytes long"
+        }
+        val partial = VaultFileHeader(payload, session.file.kdf)
+        var plaintext: ByteArray? = null
+        try {
+            plaintext = json.encodeToString(VaultPayload.serializer(), payload).encodeToByteArray()
+            val payloadBlob = EncryptedBlob(
+                nonce = encode(payloadNonce),
+                ciphertext = encode(aesGcmEncrypt(session.dataKey, plaintext, payloadNonce, payloadAad(partial, session.file.keyWrap))),
+            )
+            return partial.toVaultFile(session.file.keyWrap, payloadBlob)
+        } finally {
+            plaintext?.fill(0)
+            payloadNonce.fill(0)
         }
     }
 

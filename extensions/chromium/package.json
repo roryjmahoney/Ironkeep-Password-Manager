@@ -1,6 +1,6 @@
 {
   "name": "@ironkeep/chromium-extension",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "private": true,
   "license": "AGPL-3.0-only",
   "type": "module",
@@ -12,7 +12,7 @@
   "dependencies": {
     "@fontsource-variable/manrope": "^5.2.6",
     "@fontsource-variable/newsreader": "^5.2.6",
-    "@ironkeep/extension-ui": "0.1.0",
+    "@ironkeep/extension-ui": "0.2.0",
     "react": "^19.1.1",
     "react-dom": "^19.1.1"
   },
