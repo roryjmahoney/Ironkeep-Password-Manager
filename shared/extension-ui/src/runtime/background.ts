@@ -4,21 +4,28 @@ import {
   createUnlockedVault,
   deleteLogin,
   editLogin,
+  EphemeralCaptureStore,
+  exactOriginLogins,
   findLikelyLoginDuplicates,
+  loginFieldsForCapture,
   persistVaultMutation,
   SessionDeadline,
   shouldClearClipboard,
+  suggestCredentialCapture,
+  titleForOrigin,
   toggleLoginFavorite,
   unlockVault,
   updateSecuritySettings,
+  validCapturedCredential,
   type LoginFields,
   type LoginItem,
+  type PendingCredentialCapture,
   type UnlockedVault,
   type VaultFile,
   type VaultItem,
 } from "@ironkeep/shared";
 import browser from "webextension-polyfill";
-import type { ExtensionRequest, ExtensionResponse, PublicLogin, PublicVaultItem } from "./types.js";
+import type { ContentRequest, ContentResponse, ExtensionRequest, ExtensionResponse, PublicCapturePrompt, PublicLogin, PublicVaultItem } from "./types.js";
 
 const STORAGE_KEY = "ironkeep.encryptedVault.v1";
 const DEVICE_KEY = "ironkeep.deviceId";
@@ -28,6 +35,12 @@ const sessionNow = (): number => performance.now();
 let sessionLockTimer: ReturnType<typeof setTimeout> | null = null;
 let clipboardTimer: ReturnType<typeof setTimeout> | null = null;
 let clipboardExpected: string | null = null;
+interface RuntimeSender {
+  tab?: { id?: number };
+  frameId?: number;
+  url?: string;
+}
+const pendingCaptures = new EphemeralCaptureStore();
 
 interface OffscreenApi {
   hasDocument?: () => Promise<boolean>;
@@ -80,6 +93,7 @@ function lockVault(): void {
   sessionDeadline.close();
   unlockedVault?.close();
   unlockedVault = null;
+  pendingCaptures.clear();
   void clearOwnedClipboard();
 }
 
@@ -374,12 +388,116 @@ async function handleRequest(request: ExtensionRequest): Promise<ExtensionRespon
   }
 }
 
+function contentContext(sender: RuntimeSender): { tabId: number; origin: string } | null {
+  if (typeof sender.tab?.id !== "number" || sender.frameId !== 0 || !sender.url) return null;
+  const origin = normalizeOrigin(sender.url);
+  return origin?.startsWith("https://") ? { tabId: sender.tab.id, origin } : null;
+}
+
+function publicCapture(pending: PendingCredentialCapture): PublicCapturePrompt | null {
+  if (!unlockedVault) throw new Error("Vault is locked");
+  const suggestion = suggestCredentialCapture(unlockedVault.payload, pending.credential);
+  if (suggestion.action === "unchanged") return null;
+  const matchingIds = new Set(suggestion.matchingLoginIds);
+  return {
+    id: pending.id,
+    origin: pending.credential.origin,
+    title: titleForOrigin(pending.credential.origin),
+    username: pending.credential.username,
+    suggestedAction: suggestion.action,
+    ...(suggestion.suggestedItemId ? { suggestedItemId: suggestion.suggestedItemId } : {}),
+    matches: unlockedVault.payload.items
+      .filter((item) => matchingIds.has(item.id))
+      .map(publicItem),
+  };
+}
+
+async function handleContentRequest(request: ContentRequest, sender: RuntimeSender): Promise<ContentResponse> {
+  enforceSessionDeadline();
+  const context = contentContext(sender);
+  if (!context) return { ok: false, error: "INVALID_REQUEST" };
+  if (!unlockedVault) return { ok: false, error: "LOCKED" };
+  touchSession();
+
+  if (request.type === "CAPTURE_CREDENTIAL") {
+    if (!validCapturedCredential(request.credential) || request.credential.origin.toLowerCase() !== context.origin) {
+      return { ok: false, error: "INVALID_REQUEST" };
+    }
+    const suggestion = suggestCredentialCapture(unlockedVault.payload, request.credential);
+    if (suggestion.action === "unchanged") return { ok: true, captureStatus: "unchanged" };
+    const stored = pendingCaptures.put(context.tabId, request.credential);
+    const prompt = publicCapture(stored);
+    if (!prompt) {
+      pendingCaptures.remove(context.tabId, stored.id);
+      return { ok: true, captureStatus: "unchanged" };
+    }
+    return { ok: true, capture: prompt };
+  }
+
+  const pending = pendingCaptures.get(context.tabId);
+  if (request.type === "GET_PENDING_CAPTURE") {
+    if (!pending || pending.credential.origin.toLowerCase() !== context.origin) return { ok: true, capture: null };
+    const prompt = publicCapture(pending);
+    if (!prompt) {
+      pendingCaptures.remove(context.tabId, pending.id);
+      return { ok: true, captureStatus: "unchanged" };
+    }
+    return { ok: true, capture: prompt };
+  }
+  if (typeof request.captureId !== "string") return { ok: false, error: "INVALID_REQUEST" };
+  if (!pending || pending.id !== request.captureId || pending.credential.origin.toLowerCase() !== context.origin) {
+    return { ok: false, error: "EXPIRED" };
+  }
+  if (request.type === "DISMISS_CAPTURE") {
+    pendingCaptures.remove(context.tabId, request.captureId);
+    return { ok: true, captureStatus: "dismissed" };
+  }
+
+  if ((request.action !== "create" && request.action !== "update") || typeof request.confirmDuplicate !== "boolean" ||
+    (request.action === "update" && typeof request.itemId !== "string")) {
+    return { ok: false, error: "INVALID_REQUEST" };
+  }
+
+  try {
+    if (request.action === "create") {
+      const fields = loginFieldsForCapture(pending.credential);
+      const duplicates = findLikelyLoginDuplicates(unlockedVault.payload, fields);
+      if (duplicates.length && !request.confirmDuplicate) {
+        return { ok: false, error: "DUPLICATE", items: duplicates.map(publicItem) };
+      }
+      const next = addLogin(unlockedVault.payload, fields, { deviceId: await deviceId() });
+      if (!await persist(next)) return { ok: false, error: "PERSISTENCE_FAILED" };
+    } else {
+      const existing = request.itemId
+        ? exactOriginLogins(unlockedVault.payload, pending.credential.origin).find((item) => item.id === request.itemId)
+        : undefined;
+      if (!existing) return { ok: false, error: "INVALID_REQUEST" };
+      const fields = loginFieldsForCapture(pending.credential, existing);
+      const duplicates = findLikelyLoginDuplicates(unlockedVault.payload, fields, existing.id);
+      if (duplicates.length && !request.confirmDuplicate) {
+        return { ok: false, error: "DUPLICATE", items: duplicates.map(publicItem) };
+      }
+      const next = editLogin(unlockedVault.payload, existing.id, fields, { deviceId: await deviceId() });
+      if (!await persist(next)) return { ok: false, error: "PERSISTENCE_FAILED" };
+    }
+    pendingCaptures.remove(context.tabId, request.captureId);
+    return { ok: true, captureStatus: "saved" };
+  } catch {
+    return { ok: false, error: "INVALID_REQUEST" };
+  }
+}
+
 export function installBackground(): void {
   browser.idle.onStateChanged.addListener((state) => {
     if (state === "idle" || state === "locked") lockVault();
   });
   browser.runtime.onSuspend.addListener(lockVault);
-  browser.runtime.onMessage.addListener((rawRequest: unknown) => {
+  browser.tabs.onRemoved.addListener((tabId) => pendingCaptures.remove(tabId));
+  browser.tabs.onUpdated.addListener((tabId, changeInfo) => {
+    if (!changeInfo.url) return;
+    pendingCaptures.retainOrigin(tabId, normalizeOrigin(changeInfo.url));
+  });
+  browser.runtime.onMessage.addListener((rawRequest: unknown, sender: RuntimeSender) => {
     if (rawRequest && typeof rawRequest === "object" && "type" in rawRequest) {
       if (rawRequest.type === "IRONKEEP_CLIPBOARD_WRITE" || rawRequest.type === "IRONKEEP_CLIPBOARD_CLEAR_NOW") return undefined;
       if (rawRequest.type === "IRONKEEP_CLIPBOARD_FINISHED") {
@@ -390,6 +508,10 @@ export function installBackground(): void {
     }
     if (!rawRequest || typeof rawRequest !== "object" || !("type" in rawRequest)) {
       return Promise.resolve({ ok: false, error: "INVALID_REQUEST" } satisfies ExtensionResponse);
+    }
+    if (rawRequest.type === "CAPTURE_CREDENTIAL" || rawRequest.type === "GET_PENDING_CAPTURE" ||
+      rawRequest.type === "COMMIT_CAPTURE" || rawRequest.type === "DISMISS_CAPTURE") {
+      return handleContentRequest(rawRequest as ContentRequest, sender as RuntimeSender);
     }
     return handleRequest(rawRequest as ExtensionRequest);
   });

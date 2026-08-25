@@ -77,6 +77,26 @@ login fields required for the current origin and only after user action.
 MV3 worker suspension is a security boundary: suspension discards the session.
 The encrypted envelope persists in `storage.local`; a plaintext vault does not.
 
+### Browser capture lifecycle
+
+The shared content runtime listens only for top-frame form submission and focus
+on new-password fields. Capture is limited to visible, enabled, editable fields
+on HTTPS pages. Password generation and field detection share pure logic under
+`shared/`; each browser compiles the content entry as a standalone classic IIFE.
+
+The content script sends a candidate to the background with no tab or origin
+authority supplied separately. The background derives both from the extension
+message sender, requires frame zero and the exact HTTPS origin, and compares the
+candidate only against unlocked exact-origin logins. The page prompt receives
+account titles and identifiers but never the captured or stored password.
+
+At most one pending credential exists per tab. It remains only in background
+memory for two minutes and is destroyed on dismissal, successful save, timeout,
+cross-origin navigation, tab close, lock, worker death, reload, or restart.
+Same-origin navigation may retrieve the pending prompt. Confirmed actions flow
+through the same shared login mutations and atomic encrypted persistence used by
+the popup CRUD UI.
+
 ### Session and clipboard lifecycle
 
 Android's activity reports foreground/background transitions and user
@@ -133,6 +153,8 @@ replacement is committed before the session publishes the new payload, so a
 failed write leaves both durable and in-memory state on the previous revision.
 Session setting changes use this same mutation path and do not alter the v1
 envelope contract.
+Browser-captured login creation and update use the same path and likewise require
+no format migration.
 
 ### Android biometric unlock
 

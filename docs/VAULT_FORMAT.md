@@ -102,6 +102,11 @@ increments the vault revision and timestamps, writes with a fresh payload
 nonce, and preserves the existing data key and key wrap. This does not change
 or reinterpret the v1 envelope.
 
+Browser credential capture introduced in 0.5.0 adds no payload fields. A
+confirmed save or update is an ordinary login mutation using the existing v1
+rules. Unconfirmed candidates are short-lived browser memory and must never be
+serialized into the vault, extension storage, or sync metadata.
+
 Secrets are ordinary fields only inside the encrypted payload. Token/provider
 credentials and biometric blobs are device-local and must never be added.
 

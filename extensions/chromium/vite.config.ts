@@ -14,7 +14,6 @@ export default defineConfig({
         popup: fromRoot("./popup.html"),
         clipboard: fromRoot("./clipboard.html"),
         background: fromRoot("./src/background.ts"),
-        content: fromRoot("./src/content.ts"),
       },
       output: {
         entryFileNames: (chunk) => chunk.name === "popup" ? "assets/[name]-[hash].js" : "[name].js",

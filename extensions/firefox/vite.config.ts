@@ -13,7 +13,6 @@ export default defineConfig({
       input: {
         popup: fromRoot("./popup.html"),
         background: fromRoot("./src/background.ts"),
-        content: fromRoot("./src/content.ts"),
       },
       output: {
         entryFileNames: (chunk) => chunk.name === "popup" ? "assets/[name]-[hash].js" : "[name].js",

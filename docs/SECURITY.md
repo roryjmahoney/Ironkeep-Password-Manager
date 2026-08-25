@@ -95,6 +95,16 @@ plaintext while the vault is open; Keystore does not solve a live-device comprom
   substring matching. Require explicit confirmation for HTTP, IP literals,
   untrusted frames, saved wildcard rules, and cross-origin iframes.
 - Password fields should not be inserted until the user selects an entry.
+- Credential capture is restricted to visible editable fields in a submitted
+  top-frame HTTPS form. The background validates the sender tab, frame, and exact
+  origin; a page-supplied origin is never treated as authority.
+- Captured candidates are memory-only, limited to one per tab and two minutes,
+  and cleared on dismissal, navigation out of the exact origin, tab close, lock,
+  suspension/termination, reload, or restart. Never persist candidates before
+  explicit save/update confirmation.
+- In-page prompts may show the verified origin, proposed hostname title, and
+  account identifiers. They must never insert a captured or stored password into
+  the prompt DOM.
 - Clipboard writes expire and are best effort; explain that clipboard managers
   and other applications may retain history.
 

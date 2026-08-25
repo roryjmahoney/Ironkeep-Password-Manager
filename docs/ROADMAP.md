@@ -6,6 +6,38 @@ stable release.
 
 ## Current implementation
 
+### Completed in 0.5.0
+
+- Chromium and Firefox content scripts detect scoped top-frame HTTPS login,
+  signup, and password-change form submissions. Hidden fields, disabled fields,
+  read-only fields, mismatched password confirmations, HTTP pages, and
+  cross-origin frames are excluded.
+- Focusing a marked new-password field offers a locally generated 20-character
+  password and fills only the new/confirmation fields. Ironkeep never submits
+  the form automatically and does not offer generation on HTTP pages.
+- After submission, an isolated in-page prompt shows the verified exact origin
+  and detected identifier without rendering the password. It provides explicit
+  **Save as new login**, **Update existing login**, and **Not now** actions.
+- Existing exact-origin accounts are compared in the unlocked background
+  runtime. Identical credentials produce no prompt; matching identifiers suggest
+  an update; multiple accounts require an explicit selection; likely duplicate
+  creation requires a second confirmation.
+- One pending credential per tab lives only in background memory for at most two
+  minutes. It is wiped on confirmation, dismissal, timeout, cross-origin
+  navigation, tab close, vault lock, worker suspension/termination, extension
+  reload, or browser restart. Same-origin navigation may resume the prompt.
+- Confirmed creation and updates reuse the shared Login CRUD invariants and
+  atomic encrypted-vault persistence. Failed writes leave the previous vault
+  intact and keep the prompt available for retry.
+- Content scripts now build in a separate IIFE pass so shared capture logic
+  remains source-level reusable while Chromium and Firefox manifests still load
+  standalone classic scripts.
+- Tests cover signup/change/login detection, malformed and insecure candidates,
+  exact-origin matching, unchanged/update/create/choice decisions, metadata
+  preservation, and every pending-capture lifecycle path.
+- Version metadata updated to `0.5.0` across Android, shared workspaces,
+  Chromium, and Firefox.
+
 ### Completed in 0.4.0
 
 - Configurable automatic lock is enforced on Android, Chromium, and Firefox.
@@ -106,8 +138,9 @@ stable release.
 ### Known incomplete or placeholder behavior
 
 - Google Drive buttons and OAuth client configuration remain placeholders.
-- Android `AutofillService.onSaveRequest` remains a no-op. Browser automatic
-  login capture and save/update prompts are not implemented.
+- Android `AutofillService.onSaveRequest` remains a no-op. Browser capture is
+  implemented for ordinary top-frame HTTPS forms, but broader hostile-site and
+  framework coverage remains a release gate.
 - CRUD is implemented only for login items. Secure notes, cards, identities,
   categories, and tags do not yet have complete CRUD UI.
 - CSV import/export, onboarding, conflict UI, master-password change, and vault
@@ -144,10 +177,13 @@ not be represented as production-ready.
 - Android Autofill Framework setup, unlock authentication, exact package/domain
   association, dataset selection, save prompt, and phishing-safe warnings.
 - Browser username/password detection, user-selected fill, save/update prompt,
-  exact origin rules, iframe policy, keyboard navigation, and accessible overlay.
+  exact origin rules, top-frame policy, keyboard navigation, and accessible
+  overlay. The capture/save slice was completed in `0.5.0`; broader phishing and
+  framework compatibility testing remains required before 1.0.
 - Detect sign-up and password-change forms, offer an Ironkeep-generated password,
   and show a save-or-update prompt after the user submits or Android commits the
-  autofill context. Never save a credential without explicit confirmation.
+  autofill context. Browser support completed in `0.5.0`; Android remains open.
+  Never save a credential without explicit confirmation.
 - Detect login forms and offer only entries associated with the verified exact
   website origin or Android application. When the user selects an entry, fill
   every recognized identifier field (username, email address, or phone number)

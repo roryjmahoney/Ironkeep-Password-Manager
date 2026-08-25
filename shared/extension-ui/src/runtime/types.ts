@@ -1,4 +1,4 @@
-import type { LoginFields, VaultItemKind } from "@ironkeep/shared";
+import type { CapturedCredential, LoginFields, VaultItemKind } from "@ironkeep/shared";
 
 export interface PublicVaultItem {
   id: string;
@@ -16,6 +16,28 @@ export interface PublicSecuritySettings {
   autoLockMinutes: number;
   clearClipboardSeconds: number;
 }
+
+export interface PublicCapturePrompt {
+  id: string;
+  origin: string;
+  title: string;
+  username: string;
+  suggestedAction: "create" | "update" | "choose";
+  suggestedItemId?: string;
+  matches: PublicVaultItem[];
+}
+
+export type ContentRequest =
+  | { type: "CAPTURE_CREDENTIAL"; credential: CapturedCredential }
+  | { type: "GET_PENDING_CAPTURE" }
+  | { type: "COMMIT_CAPTURE"; captureId: string; action: "create" | "update"; itemId?: string; confirmDuplicate: boolean }
+  | { type: "DISMISS_CAPTURE"; captureId: string };
+
+export type ContentResponse =
+  | { ok: true; capture: PublicCapturePrompt | null }
+  | { ok: true; captureStatus: "unchanged" | "dismissed" | "saved" }
+  | { ok: false; error: "DUPLICATE"; items: PublicVaultItem[] }
+  | { ok: false; error: "LOCKED" | "EXPIRED" | "INVALID_REQUEST" | "PERSISTENCE_FAILED" };
 
 export type ExtensionRequest =
   | { type: "STATUS" }
