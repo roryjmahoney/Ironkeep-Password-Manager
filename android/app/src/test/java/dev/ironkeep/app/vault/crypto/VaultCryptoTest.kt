@@ -4,6 +4,7 @@ import dev.ironkeep.app.vault.model.VaultPayload
 import dev.ironkeep.app.vault.model.VaultFile
 import kotlinx.serialization.json.decodeFromJsonElement
 import kotlinx.serialization.json.jsonObject
+import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertThrows
 import org.junit.Test
@@ -54,6 +55,42 @@ class VaultCryptoTest {
         val encrypted = crypto.encryptNew("correct horse battery staple".toCharArray(), VaultPayload.empty("Test", "test-device"), KdfProfile(19 * 1024, 2, 1))
         assertThrows(VaultAuthenticationException::class.java) {
             crypto.unlock("wrong password".toCharArray(), encrypted.file)
+        }
+        encrypted.session.close()
+    }
+
+    @Test
+    fun unlocksWithRetainedSessionDataKey() {
+        val crypto = VaultCrypto()
+        val encrypted = crypto.encryptNew(
+            "correct horse battery staple".toCharArray(),
+            VaultPayload.empty("Test", "test-device"),
+            KdfProfile(19 * 1024, 2, 1),
+        )
+        val dataKey = encrypted.session.copyDataKey()
+
+        encrypted.session.close()
+        val unlocked = crypto.unlockWithDataKey(dataKey, encrypted.file)
+        val unlockedKey = unlocked.copyDataKey()
+
+        assertEquals(encrypted.file.vaultId, unlocked.payload.vaultId)
+        assertArrayEquals(dataKey, unlockedKey)
+        unlockedKey.fill(0)
+        unlocked.close()
+        dataKey.fill(0)
+    }
+
+    @Test
+    fun wrongSessionDataKeyFailsClosed() {
+        val crypto = VaultCrypto()
+        val encrypted = crypto.encryptNew(
+            "correct horse battery staple".toCharArray(),
+            VaultPayload.empty("Test", "test-device"),
+            KdfProfile(19 * 1024, 2, 1),
+        )
+
+        assertThrows(VaultAuthenticationException::class.java) {
+            crypto.unlockWithDataKey(ByteArray(32) { 0x5a }, encrypted.file)
         }
         encrypted.session.close()
     }

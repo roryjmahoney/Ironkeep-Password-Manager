@@ -72,9 +72,13 @@ non-exportable Android Keystore AES key. Require `BIOMETRIC_STRONG` for every
 unwrap via `BiometricPrompt.CryptoObject`; allow no authentication time window.
 
 Keep the biometric-wrapped blob in private local storage, never Drive. Invalidate
-the key when biometrics change. If the key is missing, invalidated, the vault
-revision/key changes, or authentication fails, delete the convenience blob and
-require the master password. Do not fall back to an app-defined PIN.
+the key when biometrics change. Bind the local blob to the vault identifier and
+password-protected key wrap, not mutable payload metadata. Normal item revisions
+remain usable because they preserve the data key and key wrap. If the key is
+missing or invalidated, the local record is corrupt or mismatched, the vault key
+wrap changes, or authenticated unwrap/decryption fails, delete the convenience
+material and require the master password. A user-cancelled prompt leaves valid
+enrollment intact. Do not fall back to an app-defined PIN.
 
 Disable Android backup for vault and key metadata. Assume root, unlocked bootloader,
 runtime instrumentation, screen capture malware, or a compromised OS can access
@@ -153,7 +157,8 @@ and stage a preview before committing one atomic vault mutation.
    implementations.
 2. Cross-platform vectors covering every item type, Unicode, corruption, and
    version rejection.
-3. Complete biometric `CryptoObject` flow with invalidation tests.
+3. Hardware-device testing of biometric enrollment changes, lockouts,
+   cancellation, process/activity recreation, and Keystore invalidation.
 4. Complete OAuth authorization and revocation for all three clients.
 5. Three-way sync/merge tests, interrupted-write tests, duplicate-remote tests,
    replay warnings, and large-vault tests.

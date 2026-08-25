@@ -1,5 +1,7 @@
 package dev.ironkeep.app.ui
 
+import android.content.Context
+import android.content.ContextWrapper
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.core.spring
 import androidx.compose.animation.fadeIn
@@ -49,6 +51,7 @@ import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -56,12 +59,18 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.RectangleShape
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.semantics.heading
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.biometric.BiometricManager
+import androidx.biometric.BiometricPrompt
+import androidx.core.content.ContextCompat
+import androidx.fragment.app.FragmentActivity
+import dev.ironkeep.app.vault.BiometricPurpose
 import dev.ironkeep.app.vault.VaultUiState
 import dev.ironkeep.app.vault.VaultViewModel
 import dev.ironkeep.app.vault.model.LoginFields
@@ -72,6 +81,43 @@ import dev.ironkeep.app.vault.model.VaultMutations
 @Composable
 fun IronkeepApp(viewModel: VaultViewModel) {
     val state by viewModel.state.collectAsStateWithLifecycle()
+    val activity = LocalContext.current.findFragmentActivity()
+    val biometricPrompt = remember(activity, viewModel) {
+        BiometricPrompt(
+            activity,
+            ContextCompat.getMainExecutor(activity),
+            object : BiometricPrompt.AuthenticationCallback() {
+                override fun onAuthenticationSucceeded(result: BiometricPrompt.AuthenticationResult) {
+                    val cipher = result.cryptoObject?.cipher
+                    if (cipher == null) viewModel.cancelBiometricAuthentication("Biometric authentication returned no cryptographic proof.")
+                    else viewModel.completeBiometricAuthentication(cipher)
+                }
+
+                override fun onAuthenticationError(errorCode: Int, errString: CharSequence) {
+                    val cancelled = errorCode == BiometricPrompt.ERROR_NEGATIVE_BUTTON ||
+                        errorCode == BiometricPrompt.ERROR_USER_CANCELED ||
+                        errorCode == BiometricPrompt.ERROR_CANCELED
+                    viewModel.cancelBiometricAuthentication(if (cancelled) null else "Biometric authentication unavailable. Use the master password.")
+                }
+            },
+        )
+    }
+    LaunchedEffect(viewModel, biometricPrompt) {
+        viewModel.biometricRequests.collect { request ->
+            val available = BiometricManager.from(activity).canAuthenticate(BiometricManager.Authenticators.BIOMETRIC_STRONG)
+            if (available != BiometricManager.BIOMETRIC_SUCCESS) {
+                viewModel.cancelBiometricAuthentication("A strong enrolled biometric is required. Use the master password.")
+                return@collect
+            }
+            val promptInfo = BiometricPrompt.PromptInfo.Builder()
+                .setTitle(if (request.purpose == BiometricPurpose.ENROLL) "Enable biometric unlock" else "Unlock Ironkeep")
+                .setSubtitle(if (request.purpose == BiometricPurpose.ENROLL) "Confirm to protect the vault key on this device" else "Authenticate to decrypt your local vault")
+                .setAllowedAuthenticators(BiometricManager.Authenticators.BIOMETRIC_STRONG)
+                .setNegativeButtonText("Use master password")
+                .build()
+            biometricPrompt.authenticate(promptInfo, BiometricPrompt.CryptoObject(request.cipher))
+        }
+    }
     AnimatedContent(
         targetState = state,
         transitionSpec = { fadeIn(spring(stiffness = 600f)) togetherWith fadeOut() },
@@ -80,15 +126,31 @@ fun IronkeepApp(viewModel: VaultViewModel) {
         when (current) {
             VaultUiState.Loading -> LoadingScreen()
             VaultUiState.Setup -> GateScreen(creating = true, error = null, onSubmit = viewModel::create)
-            VaultUiState.Locked -> GateScreen(creating = false, error = null, onSubmit = viewModel::unlock)
-            is VaultUiState.Error -> GateScreen(creating = current.creating, error = current.message, onSubmit = if (current.creating) viewModel::create else viewModel::unlock)
+            is VaultUiState.Locked -> GateScreen(
+                creating = false,
+                error = current.message,
+                biometricEnrolled = current.biometricEnrolled,
+                onSubmit = viewModel::unlock,
+                onBiometricUnlock = viewModel::requestBiometricUnlock,
+            )
+            is VaultUiState.Error -> GateScreen(
+                creating = current.creating,
+                error = current.message,
+                biometricEnrolled = current.biometricEnrolled,
+                onSubmit = if (current.creating) viewModel::create else viewModel::unlock,
+                onBiometricUnlock = viewModel::requestBiometricUnlock,
+            )
             is VaultUiState.Unlocked -> VaultHome(
                 vault = current.vault,
                 error = current.error,
+                notice = current.notice,
+                biometricEnabled = current.biometricEnabled,
                 onAdd = viewModel::addLogin,
                 onEdit = viewModel::editLogin,
                 onDelete = viewModel::deleteLogin,
                 onToggleFavorite = viewModel::toggleLoginFavorite,
+                onEnableBiometric = viewModel::requestBiometricEnrollment,
+                onDisableBiometric = viewModel::disableBiometricUnlock,
                 onLock = viewModel::lock,
             )
         }
@@ -101,7 +163,13 @@ private fun LoadingScreen() = Box(Modifier.fillMaxSize().background(MaterialThem
 }
 
 @Composable
-private fun GateScreen(creating: Boolean, error: String?, onSubmit: (CharArray) -> Unit) {
+private fun GateScreen(
+    creating: Boolean,
+    error: String?,
+    biometricEnrolled: Boolean = false,
+    onSubmit: (CharArray) -> Unit,
+    onBiometricUnlock: () -> Unit = {},
+) {
     var password by remember(creating) { mutableStateOf("") }
     var confirmation by remember(creating) { mutableStateOf("") }
     var localError by remember { mutableStateOf<String?>(null) }
@@ -168,12 +236,19 @@ private fun GateScreen(creating: Boolean, error: String?, onSubmit: (CharArray) 
                     Spacer(Modifier.size(8.dp))
                     Text(if (creating) "Create encrypted vault" else "Unlock locally")
                 }
-                if (!creating) {
-                    TextButton(onClick = { }, modifier = Modifier.align(Alignment.CenterHorizontally)) {
+                if (!creating && biometricEnrolled) {
+                    TextButton(onClick = onBiometricUnlock, modifier = Modifier.align(Alignment.CenterHorizontally).height(48.dp)) {
                         Icon(Icons.Outlined.Fingerprint, contentDescription = null)
                         Spacer(Modifier.size(8.dp))
                         Text("Use biometric unlock")
                     }
+                } else if (!creating) {
+                    Text(
+                        "Unlock once with your master password to enable biometrics on this device.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.padding(top = 12.dp),
+                    )
                 }
             }
             Text("Offline by default · AES-256-GCM · Argon2id", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
@@ -197,16 +272,21 @@ private fun Wordmark() = Row(verticalAlignment = Alignment.CenterVertically) {
 private fun VaultHome(
     vault: VaultPayload,
     error: String?,
+    notice: String?,
+    biometricEnabled: Boolean,
     onAdd: (LoginFields) -> Unit,
     onEdit: (String, LoginFields) -> Unit,
     onDelete: (String) -> Unit,
     onToggleFavorite: (String) -> Unit,
+    onEnableBiometric: () -> Unit,
+    onDisableBiometric: () -> Unit,
     onLock: () -> Unit,
 ) {
     var query by remember { mutableStateOf("") }
     var editingId by remember { mutableStateOf<String?>(null) }
     var creating by remember { mutableStateOf(false) }
     var deleteTarget by remember { mutableStateOf<LoginItem?>(null) }
+    var confirmDisableBiometric by remember { mutableStateOf(false) }
     val logins = vault.items.filterIsInstance<LoginItem>().filter {
         query.isBlank() || it.title.contains(query, true) || it.username.contains(query, true)
     }
@@ -233,6 +313,26 @@ private fun VaultHome(
                 IconButton(onClick = onLock) { Icon(Icons.Outlined.Lock, contentDescription = "Lock vault") }
             }
             HorizontalDivider(color = MaterialTheme.colorScheme.outline)
+            Row(
+                Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 12.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Icon(Icons.Outlined.Fingerprint, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
+                Column(Modifier.weight(1f).padding(horizontal = 12.dp)) {
+                    Text(if (biometricEnabled) "Biometric unlock enabled" else "Faster local unlock", style = MaterialTheme.typography.titleSmall)
+                    Text(
+                        if (biometricEnabled) "Protected by Android Keystore on this device." else "Require a strong biometric for every vault-key unwrap.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+                OutlinedButton(
+                    onClick = { if (biometricEnabled) confirmDisableBiometric = true else onEnableBiometric() },
+                    shape = RectangleShape,
+                    modifier = Modifier.height(48.dp),
+                ) { Text(if (biometricEnabled) "Disable" else "Enable") }
+            }
+            HorizontalDivider(color = MaterialTheme.colorScheme.outline)
             OutlinedTextField(
                 value = query,
                 onValueChange = { query = it },
@@ -243,6 +343,7 @@ private fun VaultHome(
                 shape = RectangleShape,
             )
             if (error != null) Text(error, color = MaterialTheme.colorScheme.error, modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp))
+            if (notice != null) Text(notice, color = MaterialTheme.colorScheme.primary, modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp))
             if (vault.items.filterIsInstance<LoginItem>().isEmpty()) {
                 Column(
                     Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 40.dp),
@@ -313,6 +414,27 @@ private fun VaultHome(
             dismissButton = { TextButton(onClick = { deleteTarget = null }) { Text("Cancel") } },
         )
     }
+    if (confirmDisableBiometric) {
+        AlertDialog(
+            onDismissRequest = { confirmDisableBiometric = false },
+            title = { Text("Disable biometric unlock?") },
+            text = { Text("Your vault remains encrypted. You will need the master password the next time you unlock it.") },
+            confirmButton = {
+                Button(
+                    onClick = { confirmDisableBiometric = false; onDisableBiometric() },
+                    shape = RectangleShape,
+                    colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error, contentColor = MaterialTheme.colorScheme.onError),
+                ) { Text("Disable") }
+            },
+            dismissButton = { TextButton(onClick = { confirmDisableBiometric = false }) { Text("Keep enabled") } },
+        )
+    }
+}
+
+private tailrec fun Context.findFragmentActivity(): FragmentActivity = when (this) {
+    is FragmentActivity -> this
+    is ContextWrapper -> baseContext.findFragmentActivity()
+    else -> error("Ironkeep requires a FragmentActivity context")
 }
 
 @Composable

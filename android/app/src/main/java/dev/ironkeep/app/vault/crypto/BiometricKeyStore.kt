@@ -37,6 +37,8 @@ class BiometricKeyStore {
         }
     }
 
+    fun hasKey(): Boolean = KeyStore.getInstance(ANDROID_KEYSTORE).apply { load(null) }.containsAlias(KEY_ALIAS)
+
     fun newEncryptionCipher(): Cipher = Cipher.getInstance("AES/GCM/NoPadding").apply {
         init(Cipher.ENCRYPT_MODE, secretKey())
     }
@@ -45,7 +47,10 @@ class BiometricKeyStore {
         init(Cipher.DECRYPT_MODE, secretKey(), GCMParameterSpec(128, nonce))
     }
 
-    fun deleteKey() = KeyStore.getInstance(ANDROID_KEYSTORE).apply { load(null) }.deleteEntry(KEY_ALIAS)
+    fun deleteKey() = KeyStore.getInstance(ANDROID_KEYSTORE).apply {
+        load(null)
+        if (containsAlias(KEY_ALIAS)) deleteEntry(KEY_ALIAS)
+    }
 
     private fun secretKey(): SecretKey {
         val store = KeyStore.getInstance(ANDROID_KEYSTORE).apply { load(null) }

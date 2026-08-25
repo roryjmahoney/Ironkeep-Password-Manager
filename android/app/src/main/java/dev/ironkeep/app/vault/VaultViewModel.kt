@@ -2,6 +2,9 @@ package dev.ironkeep.app.vault
 
 import android.app.Application
 import android.content.Context
+import dev.ironkeep.app.vault.crypto.BiometricKeyStore
+import dev.ironkeep.app.vault.crypto.BiometricVaultBinding
+import dev.ironkeep.app.vault.crypto.BiometricVaultRecord
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import dev.ironkeep.app.vault.crypto.VaultAuthenticationException
@@ -11,34 +14,61 @@ import dev.ironkeep.app.vault.model.VaultPayload
 import dev.ironkeep.app.vault.model.VaultMutations
 import dev.ironkeep.app.vault.session.VaultPersistence
 import dev.ironkeep.app.vault.session.VaultSessionHolder
+import dev.ironkeep.app.vault.storage.BiometricVaultStore
 import dev.ironkeep.app.vault.storage.VaultFileStore
+import dev.ironkeep.app.vault.model.VaultFile
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import javax.crypto.Cipher
 
 sealed interface VaultUiState {
     data object Loading : VaultUiState
     data object Setup : VaultUiState
-    data object Locked : VaultUiState
-    data class Unlocked(val vault: VaultPayload, val error: String? = null) : VaultUiState
-    data class Error(val creating: Boolean, val message: String) : VaultUiState
+    data class Locked(val biometricEnrolled: Boolean, val message: String? = null) : VaultUiState
+    data class Unlocked(
+        val vault: VaultPayload,
+        val error: String? = null,
+        val notice: String? = null,
+        val biometricEnabled: Boolean = false,
+    ) : VaultUiState
+    data class Error(val creating: Boolean, val message: String, val biometricEnrolled: Boolean = false) : VaultUiState
+}
+
+enum class BiometricPurpose { ENROLL, UNLOCK }
+data class BiometricPromptRequest(val purpose: BiometricPurpose, val cipher: Cipher)
+
+private sealed interface PendingBiometric {
+    val cipher: Cipher
+
+    data class Enrollment(val binding: BiometricVaultBinding, override val cipher: Cipher) : PendingBiometric
+    data class Unlock(val file: VaultFile, val record: BiometricVaultRecord, override val cipher: Cipher) : PendingBiometric
 }
 
 class VaultViewModel(application: Application) : AndroidViewModel(application) {
     private val crypto = VaultCrypto()
     private val store = VaultFileStore(application, crypto.json)
+    private val biometricKeyStore = BiometricKeyStore()
+    private val biometricStore = BiometricVaultStore(application, crypto.json)
     private val persistence = VaultPersistence(crypto, store)
     private val mutationMutex = Mutex()
     private val mutableState = MutableStateFlow<VaultUiState>(VaultUiState.Loading)
     val state: StateFlow<VaultUiState> = mutableState.asStateFlow()
+    private val mutableBiometricRequests = MutableSharedFlow<BiometricPromptRequest>(extraBufferCapacity = 1)
+    val biometricRequests: SharedFlow<BiometricPromptRequest> = mutableBiometricRequests.asSharedFlow()
+    @Volatile private var pendingBiometric: PendingBiometric? = null
+    private var biometricRequestStarting = false
 
     init {
-        mutableState.value = if (store.exists()) VaultUiState.Locked else VaultUiState.Setup
+        mutableState.value = if (store.exists()) VaultUiState.Locked(biometricMaterialPresent()) else VaultUiState.Setup
     }
 
     fun create(masterPassword: CharArray) {
@@ -59,8 +89,9 @@ class VaultViewModel(application: Application) : AndroidViewModel(application) {
                     result.session.close()
                     throw error
                 }
+                withContext(Dispatchers.IO) { clearBiometricMaterial() }
                 VaultSessionHolder.replace(result.session)
-                mutableState.value = VaultUiState.Unlocked(result.session.payload)
+                mutableState.value = VaultUiState.Unlocked(result.session.payload, biometricEnabled = false)
             } catch (_: Exception) {
                 mutableState.value = VaultUiState.Error(true, "Vault creation failed. Check available memory and storage.")
             } finally {
@@ -75,12 +106,13 @@ class VaultViewModel(application: Application) : AndroidViewModel(application) {
             try {
                 val file = withContext(Dispatchers.IO) { store.read() }
                 val session = withContext(Dispatchers.Default) { crypto.unlock(masterPassword, file) }
+                val biometricEnabled = withContext(Dispatchers.IO) { biometricEnrollmentValidFor(file) }
                 VaultSessionHolder.replace(session)
-                mutableState.value = VaultUiState.Unlocked(session.payload)
+                mutableState.value = VaultUiState.Unlocked(session.payload, biometricEnabled = biometricEnabled)
             } catch (_: VaultAuthenticationException) {
-                mutableState.value = VaultUiState.Error(false, "Master password not accepted.")
+                mutableState.value = VaultUiState.Error(false, "Master password not accepted.", biometricMaterialPresent())
             } catch (_: Exception) {
-                mutableState.value = VaultUiState.Error(false, "Vault could not be opened safely.")
+                mutableState.value = VaultUiState.Error(false, "Vault could not be opened safely.", biometricMaterialPresent())
             } finally {
                 masterPassword.fill('\u0000')
             }
@@ -89,7 +121,100 @@ class VaultViewModel(application: Application) : AndroidViewModel(application) {
 
     fun lock() {
         VaultSessionHolder.lock()
-        mutableState.value = VaultUiState.Locked
+        mutableState.value = VaultUiState.Locked(biometricMaterialPresent())
+    }
+
+    fun requestBiometricEnrollment() {
+        val session = VaultSessionHolder.sessionOrNull() ?: return
+        if (!beginBiometricRequest()) return
+        viewModelScope.launch {
+            try {
+                val binding = BiometricVaultBinding.from(session.file)
+                val cipher = withContext(Dispatchers.IO) {
+                    clearBiometricMaterial()
+                    biometricKeyStore.createKey()
+                    biometricKeyStore.newEncryptionCipher()
+                }
+                pendingBiometric = PendingBiometric.Enrollment(binding, cipher)
+                mutableBiometricRequests.emit(BiometricPromptRequest(BiometricPurpose.ENROLL, cipher))
+            } catch (_: Exception) {
+                withContext(Dispatchers.IO) { clearBiometricMaterial() }
+                mutableState.value = VaultUiState.Unlocked(session.payload, error = "Biometric enrollment could not start. Use the master password.")
+            } finally {
+                endBiometricRequestPreparation()
+            }
+        }
+    }
+
+    fun requestBiometricUnlock() {
+        if (!beginBiometricRequest()) return
+        viewModelScope.launch {
+            try {
+                val request = withContext(Dispatchers.IO) {
+                    val file = store.read()
+                    val record = biometricStore.read() ?: error("Biometric enrollment not found")
+                    if (!record.matches(file) || !biometricKeyStore.hasKey()) error("Biometric enrollment is stale")
+                    val nonce = record.nonceBytes()
+                    val cipher = try {
+                        biometricKeyStore.newDecryptionCipher(nonce)
+                    } finally {
+                        nonce.fill(0)
+                    }
+                    pendingBiometric = PendingBiometric.Unlock(file, record, cipher)
+                    BiometricPromptRequest(BiometricPurpose.UNLOCK, cipher)
+                }
+                mutableBiometricRequests.emit(request)
+            } catch (_: Exception) {
+                withContext(Dispatchers.IO) { clearBiometricMaterial() }
+                mutableState.value = VaultUiState.Locked(false, "Biometric unlock was reset. Unlock with your master password to enroll again.")
+            } finally {
+                endBiometricRequestPreparation()
+            }
+        }
+    }
+
+    fun completeBiometricAuthentication(cipher: Cipher) {
+        val pending = pendingBiometric.also { pendingBiometric = null } ?: return
+        if (pending.cipher !== cipher) {
+            viewModelScope.launch {
+                if (pending is PendingBiometric.Enrollment) {
+                    withContext(Dispatchers.IO) { clearBiometricMaterial() }
+                }
+                when (val current = mutableState.value) {
+                    is VaultUiState.Unlocked -> mutableState.value = current.copy(error = "Biometric authentication could not be verified.")
+                    is VaultUiState.Locked -> mutableState.value = current.copy(message = "Biometric authentication could not be verified.")
+                    else -> Unit
+                }
+            }
+            return
+        }
+        viewModelScope.launch {
+            when (pending) {
+                is PendingBiometric.Enrollment -> completeBiometricEnrollment(pending, cipher)
+                is PendingBiometric.Unlock -> completeBiometricUnlock(pending, cipher)
+            }
+        }
+    }
+
+    fun cancelBiometricAuthentication(message: String? = null) {
+        val pending = pendingBiometric.also { pendingBiometric = null }
+        viewModelScope.launch {
+            if (pending is PendingBiometric.Enrollment) withContext(Dispatchers.IO) { clearBiometricMaterial() }
+            when (val current = mutableState.value) {
+                is VaultUiState.Unlocked -> mutableState.value = current.copy(error = message)
+                is VaultUiState.Locked -> mutableState.value = current.copy(message = message)
+                is VaultUiState.Error -> mutableState.value = current.copy(message = message ?: current.message)
+                else -> Unit
+            }
+        }
+    }
+
+    fun disableBiometricUnlock() {
+        val session = VaultSessionHolder.sessionOrNull() ?: return
+        viewModelScope.launch {
+            withContext(Dispatchers.IO) { clearBiometricMaterial() }
+            mutableState.value = VaultUiState.Unlocked(session.payload, notice = "Biometric unlock disabled on this device.")
+        }
     }
 
     fun addLogin(fields: LoginFields) = mutate { payload -> VaultMutations.addLogin(payload, fields, deviceId()) }
@@ -105,16 +230,17 @@ class VaultViewModel(application: Application) : AndroidViewModel(application) {
             mutationMutex.withLock {
                 val session = VaultSessionHolder.sessionOrNull()
                 if (session == null) {
-                    mutableState.value = VaultUiState.Locked
+                    mutableState.value = VaultUiState.Locked(biometricMaterialPresent())
                     return@withLock
                 }
                 val previous = session.payload
+                val biometricEnabled = (mutableState.value as? VaultUiState.Unlocked)?.biometricEnabled == true
                 try {
                     val next = withContext(Dispatchers.Default) { transform(previous) }
                     withContext(Dispatchers.IO) { persistence.persist(session, next) }
-                    mutableState.value = VaultUiState.Unlocked(next)
+                    mutableState.value = VaultUiState.Unlocked(next, biometricEnabled = biometricEnabled)
                 } catch (_: Exception) {
-                    mutableState.value = VaultUiState.Unlocked(previous, "Encrypted vault could not be saved. Previous data is intact.")
+                    mutableState.value = VaultUiState.Unlocked(previous, "Encrypted vault could not be saved. Previous data is intact.", biometricEnabled = biometricEnabled)
                 }
             }
         }
@@ -123,6 +249,102 @@ class VaultViewModel(application: Application) : AndroidViewModel(application) {
     override fun onCleared() {
         VaultSessionHolder.lock()
         super.onCleared()
+    }
+
+    private suspend fun completeBiometricEnrollment(pending: PendingBiometric.Enrollment, cipher: Cipher) {
+        val session = VaultSessionHolder.sessionOrNull()
+        if (session == null || !pending.binding.matches(session.file)) {
+            withContext(Dispatchers.IO) { clearBiometricMaterial() }
+            mutableState.value = VaultUiState.Locked(false, "Vault changed before biometric enrollment completed.")
+            return
+        }
+        var dataKey: ByteArray? = null
+        var wrappedKey: ByteArray? = null
+        var aad: ByteArray? = null
+        try {
+            val key = session.copyDataKey()
+            dataKey = key
+            val authenticatedData = pending.binding.aad()
+            aad = authenticatedData
+            cipher.updateAAD(authenticatedData)
+            val encrypted = withContext(Dispatchers.Default) { cipher.doFinal(key) }
+            wrappedKey = encrypted
+            val record = pending.binding.wrapped(cipher.iv, encrypted)
+            withContext(Dispatchers.IO) { biometricStore.write(record) }
+            mutableState.value = VaultUiState.Unlocked(session.payload, notice = "Biometric unlock enabled on this device.", biometricEnabled = true)
+        } catch (_: Exception) {
+            withContext(Dispatchers.IO) { clearBiometricMaterial() }
+            mutableState.value = VaultUiState.Unlocked(session.payload, error = "Biometric enrollment failed. Use the master password.")
+        } finally {
+            dataKey?.fill(0)
+            wrappedKey?.fill(0)
+            aad?.fill(0)
+        }
+    }
+
+    private suspend fun completeBiometricUnlock(pending: PendingBiometric.Unlock, cipher: Cipher) {
+        var encryptedKey: ByteArray? = null
+        var dataKey: ByteArray? = null
+        var aad: ByteArray? = null
+        try {
+            val wrapped = pending.record.ciphertextBytes()
+            encryptedKey = wrapped
+            val authenticatedData = pending.record.aad()
+            aad = authenticatedData
+            cipher.updateAAD(authenticatedData)
+            val key = withContext(Dispatchers.Default) { cipher.doFinal(wrapped) }
+            dataKey = key
+            val session = withContext(Dispatchers.Default) { crypto.unlockWithDataKey(key, pending.file) }
+            VaultSessionHolder.replace(session)
+            mutableState.value = VaultUiState.Unlocked(session.payload, biometricEnabled = true)
+        } catch (_: Exception) {
+            withContext(Dispatchers.IO) { clearBiometricMaterial() }
+            mutableState.value = VaultUiState.Locked(false, "Biometric unlock failed and was reset. Use your master password to enroll again.")
+        } finally {
+            encryptedKey?.fill(0)
+            dataKey?.fill(0)
+            aad?.fill(0)
+        }
+    }
+
+    private fun biometricMaterialPresent(): Boolean = try {
+        val recordExists = biometricStore.exists()
+        val keyExists = biometricKeyStore.hasKey()
+        if (recordExists != keyExists) {
+            clearBiometricMaterial()
+            false
+        } else recordExists
+    } catch (_: Exception) {
+        clearBiometricMaterial()
+        false
+    }
+
+    private fun biometricEnrollmentValidFor(file: VaultFile): Boolean = try {
+        val record = biometricStore.read()
+        if (record != null && record.matches(file) && biometricKeyStore.hasKey()) true else {
+            clearBiometricMaterial()
+            false
+        }
+    } catch (_: Exception) {
+        clearBiometricMaterial()
+        false
+    }
+
+    private fun clearBiometricMaterial() {
+        runCatching { biometricStore.clear() }
+        runCatching { biometricKeyStore.deleteKey() }
+    }
+
+    @Synchronized
+    private fun beginBiometricRequest(): Boolean {
+        if (biometricRequestStarting || pendingBiometric != null) return false
+        biometricRequestStarting = true
+        return true
+    }
+
+    @Synchronized
+    private fun endBiometricRequestPreparation() {
+        biometricRequestStarting = false
     }
 
     private fun deviceId(): String {

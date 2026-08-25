@@ -6,6 +6,30 @@ stable release.
 
 ## Current implementation
 
+### Completed in 0.3.0
+
+- Android biometric enrollment, unlock, and explicit disable flows are wired
+  through `BiometricPrompt.CryptoObject` instead of retaining the master
+  password.
+- A non-exportable Android Keystore AES-256-GCM key wraps the live 32-byte vault
+  data key. Every unwrap requires `BIOMETRIC_STRONG`; no authentication window
+  or app-defined PIN fallback is used.
+- The local convenience record is atomically stored in private app storage and
+  bound with authenticated data to the vault identifier and existing key wrap.
+  Login CRUD payload revisions remain compatible because they preserve that key
+  wrap.
+- Missing, corrupt, invalidated, or mismatched biometric material is cleared and
+  falls back to the master password. Creating a replacement vault also clears
+  old biometric material.
+- The locked screen only offers biometric unlock after local enrollment. The
+  unlocked screen exposes clear enable/disable status, confirmation, and
+  success/failure feedback.
+- Tests cover direct payload unlock with the retained data key, rejection of a
+  wrong data key, biometric record validation, and invalidation when the vault
+  key wrap changes.
+- Version metadata updated to `0.3.0` across Android, shared workspaces,
+  Chromium, and Firefox.
+
 ### Completed in 0.2.0
 
 - Login create, edit, tombstone delete, and favorite toggle on Android,
@@ -53,9 +77,6 @@ stable release.
 
 ### Known incomplete or placeholder behavior
 
-- The Android **Use biometric unlock** button currently does nothing. Biometric
-  enrollment, `BiometricPrompt.CryptoObject` orchestration, data-key unwrap,
-  invalidation handling, and tests are not implemented.
 - Google Drive buttons and OAuth client configuration remain placeholders.
 - Android `AutofillService.onSaveRequest` remains a no-op. Browser automatic
   login capture and save/update prompts are not implemented.
@@ -76,6 +97,7 @@ not be represented as production-ready.
 - Automatic lock on timeout, Android backgrounding, browser idle/worker death,
   OS/browser lock, and explicit lock.
 - Working Android biometric enrollment and authentication-per-use unlock.
+  Completed in `0.3.0`; hardware-device coverage remains a release gate.
 - Secure clipboard with configurable clearing and warnings.
 
 ### Items and organization

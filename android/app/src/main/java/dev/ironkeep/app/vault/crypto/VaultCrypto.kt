@@ -39,6 +39,11 @@ class UnlockedVault internal constructor(
 
     internal fun requireOpen() = check(!closed) { "Vault session is locked" }
 
+    internal fun copyDataKey(): ByteArray {
+        requireOpen()
+        return dataKey.copyOf()
+    }
+
     internal fun commit(file: VaultFile, payload: VaultPayload) {
         requireOpen()
         require(file.vaultId == payload.vaultId && file.revision == payload.revision && file.updatedAt == payload.updatedAt && file.writerDeviceId == payload.writerDeviceId)
@@ -143,6 +148,35 @@ class VaultCrypto(
             dataKey?.fill(0)
             plaintext?.fill(0)
             masterPassword.fill('\u0000')
+        }
+    }
+
+    fun unlockWithDataKey(unwrappedDataKey: ByteArray, file: VaultFile): UnlockedVault {
+        validateEnvelope(file)
+        if (unwrappedDataKey.size != AES_KEY_BYTES) throw VaultAuthenticationException()
+        var dataKey: ByteArray? = unwrappedDataKey.copyOf()
+        var plaintext: ByteArray? = null
+        try {
+            plaintext = aesGcmDecrypt(
+                requireNotNull(dataKey),
+                decode(file.payload.ciphertext),
+                decode(file.payload.nonce),
+                payloadAad(file.header(), file.keyWrap),
+            )
+            val payload = json.decodeFromString(VaultPayload.serializer(), plaintext.decodeToString())
+            if (
+                payload.schemaVersion != VAULT_SCHEMA_VERSION || payload.vaultId != file.vaultId ||
+                payload.revision != file.revision || payload.updatedAt != file.updatedAt ||
+                payload.writerDeviceId != file.writerDeviceId
+            ) throw VaultAuthenticationException()
+            return UnlockedVault(payload, requireNotNull(dataKey), file).also { dataKey = null }
+        } catch (_: VaultAuthenticationException) {
+            throw VaultAuthenticationException()
+        } catch (_: Exception) {
+            throw VaultAuthenticationException()
+        } finally {
+            dataKey?.fill(0)
+            plaintext?.fill(0)
         }
     }
 

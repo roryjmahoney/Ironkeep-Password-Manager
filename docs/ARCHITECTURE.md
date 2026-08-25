@@ -110,6 +110,27 @@ they never require or retain the master password. The persisted encrypted
 replacement is committed before the session publishes the new payload, so a
 failed write leaves both durable and in-memory state on the previous revision.
 
+### Android biometric unlock
+
+1. The user first unlocks with the master password and explicitly enables
+   biometrics.
+2. Ironkeep creates a non-exportable, authentication-per-use Android Keystore
+   AES key and asks `BiometricPrompt` to authorize an encryption `CryptoObject`.
+3. That cipher wraps a copy of the live vault data key. An atomic private local
+   record stores only the wrapped key, nonce, and its binding to the vault
+   identifier and existing password-protected key wrap.
+4. A later unlock authorizes a decryption `CryptoObject`, unwraps the data key,
+   and authenticates/decrypts the persisted v1 payload without the master
+   password being retained.
+5. Normal item saves change only payload metadata/ciphertext, so enrollment
+   remains valid. A changed vault identity or key wrap, invalidated/missing
+   Keystore key, corrupt record, or failed authenticated decryption clears the
+   local convenience material and requires the master password.
+
+The biometric record never enters the `.ikv` envelope or Google Drive. Android
+backup and device-transfer rules exclude the vault, record, Keystore metadata,
+and all other private app data.
+
 ## Optional Google Drive lifecycle
 
 One file named `ironkeep-vault.ikv` is created in Drive's hidden
