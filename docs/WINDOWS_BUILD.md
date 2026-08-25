@@ -18,13 +18,13 @@ Commands use PowerShell from the repository root.
    - Android SDK Build-Tools 35.0.0 or newer compatible build tools
    - Android SDK Platform-Tools
    - Android SDK Command-line Tools
-4. Use Android Studio's bundled JDK or install a 64-bit JDK 17/21. Confirm:
+4. Select or install a 64-bit JDK 17 for Gradle. Confirm:
 
    ```powershell
    java -version
    ```
 
-The checked-in Gradle wrapper downloads Gradle 9.5.0. Do not install a global
+The checked-in Gradle wrapper downloads Gradle 8.13. Do not install a global
 Gradle or replace the wrapper with the machine's version.
 
 ## 2. Clone and install JavaScript dependencies
@@ -164,7 +164,7 @@ Publish binaries only as GitHub Release assets.
 - **Android dependency requires a newer compile SDK**: do not blindly upgrade one
   dependency. Keep the Compose BOM/toolchain compatibility set documented in
   `android\app\build.gradle.kts`, then update AGP/SDK/Compose together.
-- **Gradle uses an unexpected JDK**: set Android Studio's Gradle JDK to 17/21 or
+- **Gradle uses an unexpected JDK**: set Android Studio's Gradle JDK to 17 or
   correct `JAVA_HOME` for that terminal.
 - **OAuth invalid client/redirect**: verify the platform-specific client, stable
   extension ID, certificate fingerprint, and exact redirect URI.
