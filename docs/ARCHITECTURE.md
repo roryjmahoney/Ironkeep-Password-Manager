@@ -41,6 +41,8 @@ escrow, reset, or replace the master password.
 - `src/crypto.ts`: Argon2id, AES-256-GCM envelope, validation, and memory wiping.
 - `src/generator.ts`: rejection-sampled CSPRNG password generation.
 - `src/health.ts`: local weak/reused/old-password findings.
+- `src/session-security.ts`: shared setting limits, session-deadline behavior,
+  and clipboard ownership comparison.
 - `schemas/`: language-neutral JSON validation contract.
 - `test-vectors/`: fixed cross-language decryption vectors.
 - `extension-ui/`: shared React UI, extension runtime, autofill messages, and
@@ -74,6 +76,26 @@ login fields required for the current origin and only after user action.
 
 MV3 worker suspension is a security boundary: suspension discards the session.
 The encrypted envelope persists in `storage.local`; a plaintext vault does not.
+
+### Session and clipboard lifecycle
+
+Android's activity reports foreground/background transitions and user
+interaction to `VaultViewModel`. The ViewModel owns one monotonic session
+deadline, locks after the encrypted inactivity setting, and applies a fixed
+15-second background grace. Locking is serialized with vault mutations, cancels
+active biometric work, clears the owned clipboard value, and closes the session.
+
+The extension background runtime owns the browser deadline and checks it before
+handling each typed request. Popup pointer/keyboard activity sends a throttled
+heartbeat; status polling does not extend the session. Browser idle/OS lock,
+runtime suspension, extension reload, and worker termination all discard the
+unlocked state.
+
+Clipboard controllers retain only the expected copied value or a random Android
+clip label in live memory. A timer or lock clears the clipboard only if Ironkeep
+still owns it. Chromium performs this work in an offscreen document; Firefox
+uses its extension background page. Clipboard managers and operating-system
+history remain outside Ironkeep's control.
 
 ## Local lifecycle
 
@@ -109,6 +131,8 @@ Normal mutations reuse the live session data key and the existing v1 key wrap;
 they never require or retain the master password. The persisted encrypted
 replacement is committed before the session publishes the new payload, so a
 failed write leaves both durable and in-memory state on the previous revision.
+Session setting changes use this same mutation path and do not alter the v1
+envelope contract.
 
 ### Android biometric unlock
 

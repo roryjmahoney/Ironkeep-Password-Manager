@@ -95,6 +95,13 @@ with no spaces for AAD. Strings use normal JSON escaping and UTF-8.
 - deletion tombstones;
 - local behavior preferences that are safe to synchronize.
 
+The v1 settings object stores `autoLockMinutes` and
+`clearClipboardSeconds`. Ironkeep 0.4.0 accepts 1–60 minutes and 15–120 seconds,
+respectively. Changing either value is a normal encrypted payload mutation: it
+increments the vault revision and timestamps, writes with a fresh payload
+nonce, and preserves the existing data key and key wrap. This does not change
+or reinterpret the v1 envelope.
+
 Secrets are ordinary fields only inside the encrypted payload. Token/provider
 credentials and biometric blobs are device-local and must never be added.
 

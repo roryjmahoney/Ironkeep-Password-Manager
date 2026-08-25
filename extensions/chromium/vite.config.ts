@@ -12,6 +12,7 @@ export default defineConfig({
     rollupOptions: {
       input: {
         popup: fromRoot("./popup.html"),
+        clipboard: fromRoot("./clipboard.html"),
         background: fromRoot("./src/background.ts"),
         content: fromRoot("./src/content.ts"),
       },

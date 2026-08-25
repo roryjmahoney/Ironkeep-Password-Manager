@@ -11,6 +11,7 @@ import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.selection.selectable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -37,6 +38,8 @@ import androidx.compose.material.icons.outlined.Lock
 import androidx.compose.material.icons.outlined.Search
 import androidx.compose.material.icons.outlined.Save
 import androidx.compose.material.icons.outlined.Delete
+import androidx.compose.material.icons.outlined.ContentCopy
+import androidx.compose.material.icons.outlined.Timer
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
@@ -47,6 +50,7 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -62,6 +66,7 @@ import androidx.compose.ui.graphics.RectangleShape
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.semantics.heading
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
@@ -118,6 +123,9 @@ fun IronkeepApp(viewModel: VaultViewModel) {
             biometricPrompt.authenticate(promptInfo, BiometricPrompt.CryptoObject(request.cipher))
         }
     }
+    LaunchedEffect(viewModel, biometricPrompt) {
+        viewModel.biometricCancelRequests.collect { biometricPrompt.cancelAuthentication() }
+    }
     AnimatedContent(
         targetState = state,
         transitionSpec = { fadeIn(spring(stiffness = 600f)) togetherWith fadeOut() },
@@ -151,6 +159,8 @@ fun IronkeepApp(viewModel: VaultViewModel) {
                 onToggleFavorite = viewModel::toggleLoginFavorite,
                 onEnableBiometric = viewModel::requestBiometricEnrollment,
                 onDisableBiometric = viewModel::disableBiometricUnlock,
+                onUpdateSecuritySettings = viewModel::updateSecuritySettings,
+                onCopyPassword = viewModel::copyPassword,
                 onLock = viewModel::lock,
             )
         }
@@ -280,6 +290,8 @@ private fun VaultHome(
     onToggleFavorite: (String) -> Unit,
     onEnableBiometric: () -> Unit,
     onDisableBiometric: () -> Unit,
+    onUpdateSecuritySettings: (Int, Int) -> Unit,
+    onCopyPassword: (String) -> Unit,
     onLock: () -> Unit,
 ) {
     var query by remember { mutableStateOf("") }
@@ -287,6 +299,7 @@ private fun VaultHome(
     var creating by remember { mutableStateOf(false) }
     var deleteTarget by remember { mutableStateOf<LoginItem?>(null) }
     var confirmDisableBiometric by remember { mutableStateOf(false) }
+    var showSecuritySettings by remember { mutableStateOf(false) }
     val logins = vault.items.filterIsInstance<LoginItem>().filter {
         query.isBlank() || it.title.contains(query, true) || it.username.contains(query, true)
     }
@@ -303,6 +316,7 @@ private fun VaultHome(
                 editingId = null
             },
             onDelete = editing?.let { item -> { deleteTarget = item } },
+            onCopyPassword = onCopyPassword,
         )
     } else {
     Scaffold(containerColor = MaterialTheme.colorScheme.background) { insets ->
@@ -331,6 +345,26 @@ private fun VaultHome(
                     shape = RectangleShape,
                     modifier = Modifier.height(48.dp),
                 ) { Text(if (biometricEnabled) "Disable" else "Enable") }
+            }
+            HorizontalDivider(color = MaterialTheme.colorScheme.outline)
+            Row(
+                Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 12.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Icon(Icons.Outlined.Timer, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
+                Column(Modifier.weight(1f).padding(horizontal = 12.dp)) {
+                    Text("Session safety", style = MaterialTheme.typography.titleSmall)
+                    Text(
+                        "Auto-lock ${vault.settings.autoLockMinutes} min · Clipboard ${vault.settings.clearClipboardSeconds} sec",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+                OutlinedButton(
+                    onClick = { showSecuritySettings = true },
+                    shape = RectangleShape,
+                    modifier = Modifier.height(48.dp),
+                ) { Text("Change") }
             }
             HorizontalDivider(color = MaterialTheme.colorScheme.outline)
             OutlinedTextField(
@@ -429,6 +463,72 @@ private fun VaultHome(
             dismissButton = { TextButton(onClick = { confirmDisableBiometric = false }) { Text("Keep enabled") } },
         )
     }
+    if (showSecuritySettings) {
+        SecuritySettingsDialog(
+            currentAutoLockMinutes = vault.settings.autoLockMinutes,
+            currentClipboardSeconds = vault.settings.clearClipboardSeconds,
+            onDismiss = { showSecuritySettings = false },
+            onSave = { autoLockMinutes, clipboardSeconds ->
+                showSecuritySettings = false
+                onUpdateSecuritySettings(autoLockMinutes, clipboardSeconds)
+            },
+        )
+    }
+}
+
+@Composable
+private fun SecuritySettingsDialog(
+    currentAutoLockMinutes: Int,
+    currentClipboardSeconds: Int,
+    onDismiss: () -> Unit,
+    onSave: (Int, Int) -> Unit,
+) {
+    var autoLockMinutes by remember(currentAutoLockMinutes) { mutableStateOf(currentAutoLockMinutes) }
+    var clipboardSeconds by remember(currentClipboardSeconds) { mutableStateOf(currentClipboardSeconds) }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Session safety") },
+        text = {
+            Column(Modifier.verticalScroll(rememberScrollState())) {
+                Text("Auto-lock after inactivity", style = MaterialTheme.typography.titleSmall)
+                listOf(1, 5, 15, 30, 60).forEach { minutes ->
+                    Row(
+                        Modifier.fillMaxWidth().height(48.dp).selectable(
+                            selected = autoLockMinutes == minutes,
+                            onClick = { autoLockMinutes = minutes },
+                            role = Role.RadioButton,
+                        ),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        RadioButton(selected = autoLockMinutes == minutes, onClick = null)
+                        Text("$minutes ${if (minutes == 1) "minute" else "minutes"}", modifier = Modifier.padding(start = 8.dp))
+                    }
+                }
+                Text("Clear an Ironkeep-owned clipboard", style = MaterialTheme.typography.titleSmall, modifier = Modifier.padding(top = 16.dp))
+                listOf(15, 30, 60, 120).forEach { seconds ->
+                    Row(
+                        Modifier.fillMaxWidth().height(48.dp).selectable(
+                            selected = clipboardSeconds == seconds,
+                            onClick = { clipboardSeconds = seconds },
+                            role = Role.RadioButton,
+                        ),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        RadioButton(selected = clipboardSeconds == seconds, onClick = null)
+                        Text("$seconds seconds", modifier = Modifier.padding(start = 8.dp))
+                    }
+                }
+                Text(
+                    "Ironkeep only clears clipboard content it still owns. Clipboard managers may retain history.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(top = 12.dp),
+                )
+            }
+        },
+        confirmButton = { Button(onClick = { onSave(autoLockMinutes, clipboardSeconds) }, shape = RectangleShape) { Text("Save settings") } },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
+    )
 }
 
 private tailrec fun Context.findFragmentActivity(): FragmentActivity = when (this) {
@@ -444,6 +544,7 @@ private fun LoginForm(
     onCancel: () -> Unit,
     onSave: (LoginFields) -> Unit,
     onDelete: (() -> Unit)?,
+    onCopyPassword: (String) -> Unit,
 ) {
     var title by remember(item?.id) { mutableStateOf(item?.title.orEmpty()) }
     var username by remember(item?.id) { mutableStateOf(item?.username.orEmpty()) }
@@ -452,6 +553,7 @@ private fun LoginForm(
     var packages by remember(item?.id) { mutableStateOf(item?.androidPackageNames?.joinToString("\n").orEmpty()) }
     var localError by remember { mutableStateOf<String?>(null) }
     var duplicateFields by remember { mutableStateOf<LoginFields?>(null) }
+    var copyNotice by remember(item?.id) { mutableStateOf<String?>(null) }
 
     fun fields() = LoginFields(title, username, password, uris.lines(), packages.lines())
     fun submit() {
@@ -473,7 +575,28 @@ private fun LoginForm(
             Spacer(Modifier.height(12.dp))
             OutlinedTextField(username, { username = it }, Modifier.fillMaxWidth(), label = { Text("Username, email, or phone") }, singleLine = true, shape = RectangleShape)
             Spacer(Modifier.height(12.dp))
-            OutlinedTextField(password, { password = it }, Modifier.fillMaxWidth(), label = { Text("Password") }, visualTransformation = PasswordVisualTransformation(), singleLine = true, shape = RectangleShape)
+            OutlinedTextField(
+                password,
+                { password = it; copyNotice = null },
+                Modifier.fillMaxWidth(),
+                label = { Text("Password") },
+                visualTransformation = PasswordVisualTransformation(),
+                singleLine = true,
+                shape = RectangleShape,
+                trailingIcon = {
+                    if (password.isNotEmpty()) {
+                        IconButton(onClick = {
+                            onCopyPassword(password)
+                            copyNotice = "Copied. Clears in ${vault.settings.clearClipboardSeconds} seconds."
+                        }) {
+                            Icon(Icons.Outlined.ContentCopy, contentDescription = "Copy password")
+                        }
+                    }
+                },
+            )
+            if (copyNotice != null) {
+                Text(copyNotice.orEmpty(), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.primary, modifier = Modifier.padding(top = 8.dp))
+            }
             Spacer(Modifier.height(12.dp))
             OutlinedTextField(uris, { uris = it }, Modifier.fillMaxWidth(), label = { Text("Website URIs · one per line") }, minLines = 2, shape = RectangleShape)
             Spacer(Modifier.height(12.dp))

@@ -22,7 +22,7 @@ import { Input } from "./components/ui/Input.js";
 import { PasswordInput } from "./components/ui/PasswordInput.js";
 import { SearchInput } from "./components/ui/SearchInput.js";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "./components/ui/Tabs.js";
-import type { ExtensionRequest, ExtensionResponse, PublicLogin, PublicVaultItem } from "./runtime/types.js";
+import type { ExtensionRequest, ExtensionResponse, PublicLogin, PublicSecuritySettings, PublicVaultItem } from "./runtime/types.js";
 
 type ViewState = "loading" | "empty" | "locked" | "unlocked";
 
@@ -308,13 +308,24 @@ function VaultList({ items, onChanged }: { items: PublicVaultItem[]; onChanged: 
   );
 }
 
-function Generator() {
+function Generator({ onLock }: { onLock: () => void }) {
   const [length, setLength] = useState(20);
   const [password, setPassword] = useState(() => generatePassword({ length: 20 }));
-  const [copied, setCopied] = useState(false);
+  const [copyStatus, setCopyStatus] = useState("");
   const regenerate = () => {
     setPassword(generatePassword({ length }));
-    setCopied(false);
+    setCopyStatus("");
+  };
+  const copy = async () => {
+    setCopyStatus("");
+    const response = await send({ type: "COPY_SECRET", value: password });
+    if (response.ok && "copied" in response) {
+      setCopyStatus(`Copied. Clears in ${response.clearAfterSeconds} seconds.`);
+    } else if (!response.ok && response.error === "LOCKED") {
+      onLock();
+    } else {
+      setCopyStatus("Clipboard access failed.");
+    }
   };
   return (
     <section className="px-5 py-6" aria-labelledby="generator-title">
@@ -327,9 +338,9 @@ function Generator() {
           <Button
             size="compact"
             variant="outline"
-            onClick={() => void navigator.clipboard.writeText(password).then(() => setCopied(true))}
+            onClick={() => void copy()}
           >
-            <Copy size={14} aria-hidden="true" />{copied ? "Copied" : "Copy"}
+            <Copy size={14} aria-hidden="true" />{copyStatus.startsWith("Copied") ? "Copied" : "Copy"}
           </Button>
         </div>
       </div>
@@ -343,26 +354,98 @@ function Generator() {
         min="12"
         max="64"
         value={length}
-        onChange={(event) => { setLength(Number(event.target.value)); setCopied(false); }}
+        onChange={(event) => { setLength(Number(event.target.value)); setCopyStatus(""); }}
         onPointerUp={regenerate}
         onKeyUp={regenerate}
       />
-      <p aria-live="polite" className="mt-6 text-xs leading-5 text-muted-foreground">Generated locally with rejection-sampled cryptographic randomness. Clipboard clearing is enforced by the full runtime.</p>
+      <p aria-live="polite" className="mt-6 text-xs leading-5 text-muted-foreground">
+        {copyStatus || "Generated locally with rejection-sampled cryptographic randomness."}
+      </p>
     </section>
   );
 }
 
-function SettingsPanel() {
+function SettingsPanel({ onLock }: { onLock: () => void }) {
+  const [settings, setSettings] = useState<PublicSecuritySettings | null>(null);
+  const [autoLockMinutes, setAutoLockMinutes] = useState(5);
+  const [clearClipboardSeconds, setClearClipboardSeconds] = useState(30);
+  const [status, setStatus] = useState("");
+  const [saving, setSaving] = useState(false);
+
+  useEffect(() => {
+    void send({ type: "GET_SECURITY_SETTINGS" }).then((response) => {
+      if (response.ok && "settings" in response) {
+        setSettings(response.settings);
+        setAutoLockMinutes(response.settings.autoLockMinutes);
+        setClearClipboardSeconds(response.settings.clearClipboardSeconds);
+      } else if (!response.ok && response.error === "LOCKED") {
+        onLock();
+      } else {
+        setStatus("Settings could not be loaded.");
+      }
+    });
+  }, [onLock]);
+
+  const save = async () => {
+    setSaving(true);
+    setStatus("");
+    try {
+      const response = await send({
+        type: "UPDATE_SECURITY_SETTINGS",
+        settings: { autoLockMinutes, clearClipboardSeconds },
+      });
+      if (response.ok && "settings" in response) {
+        setSettings(response.settings);
+        setStatus("Session safety settings saved.");
+      } else if (!response.ok && response.error === "LOCKED") {
+        onLock();
+      } else {
+        setStatus("Settings could not be saved.");
+      }
+    } finally {
+      setSaving(false);
+    }
+  };
+
   return (
     <section className="px-5 py-6" aria-labelledby="settings-title">
       <p className="text-[10px] font-bold uppercase tracking-[0.2em] text-brass">Control room</p>
       <h2 id="settings-title" className="mt-2 font-display text-3xl">Settings</h2>
-      <dl className="mt-7 divide-y divide-line border-y border-line">
-        <div className="flex items-center justify-between py-4"><dt className="text-sm font-semibold">Auto-lock</dt><dd className="text-sm text-muted-foreground">5 minutes</dd></div>
-        <div className="flex items-center justify-between py-4"><dt className="text-sm font-semibold">Clipboard clear</dt><dd className="text-sm text-muted-foreground">30 seconds</dd></div>
-        <div className="flex items-center justify-between py-4"><dt className="text-sm font-semibold">Google Drive</dt><dd className="text-sm text-muted-foreground">Not connected</dd></div>
-      </dl>
-      <Button className="mt-6 w-full" variant="outline"><ShieldCheck size={16} aria-hidden="true" />Connect Google Drive</Button>
+      <div className="mt-7 space-y-5 border-y border-line py-5">
+        <label className="block text-sm font-semibold" htmlFor="auto-lock-minutes">
+          Auto-lock after inactivity
+        </label>
+        <select
+          id="auto-lock-minutes"
+          className="min-h-11 w-full border border-line bg-field px-3 text-sm text-foreground outline-none focus-visible:ring-2 focus-visible:ring-ring"
+          value={autoLockMinutes}
+          disabled={!settings || saving}
+          onChange={(event) => { setAutoLockMinutes(Number(event.target.value)); setStatus(""); }}
+        >
+          {[1, 5, 15, 30, 60].map((minutes) => <option key={minutes} value={minutes}>{minutes} minute{minutes === 1 ? "" : "s"}</option>)}
+        </select>
+        <label className="block text-sm font-semibold" htmlFor="clipboard-clear-seconds">
+          Clear copied passwords after
+        </label>
+        <select
+          id="clipboard-clear-seconds"
+          className="min-h-11 w-full border border-line bg-field px-3 text-sm text-foreground outline-none focus-visible:ring-2 focus-visible:ring-ring"
+          value={clearClipboardSeconds}
+          disabled={!settings || saving}
+          onChange={(event) => { setClearClipboardSeconds(Number(event.target.value)); setStatus(""); }}
+        >
+          {[15, 30, 60, 120].map((seconds) => <option key={seconds} value={seconds}>{seconds} seconds</option>)}
+        </select>
+        <Button className="w-full" disabled={!settings || saving} onClick={() => void save()}>
+          <Save size={15} aria-hidden="true" />{saving ? "Saving…" : "Save session settings"}
+        </Button>
+        <p aria-live="polite" className="min-h-5 text-xs leading-5 text-muted-foreground">{status}</p>
+      </div>
+      <div className="mt-6 flex items-center justify-between border-b border-line pb-4">
+        <span className="text-sm font-semibold">Google Drive</span>
+        <span className="text-sm text-muted-foreground">Not connected</span>
+      </div>
+      <Button className="mt-4 w-full" variant="outline"><ShieldCheck size={16} aria-hidden="true" />Connect Google Drive</Button>
     </section>
   );
 }
@@ -376,6 +459,33 @@ function UnlockedView({ onLock }: { onLock: () => void }) {
       else if (!response.ok && response.error === "LOCKED") onLock();
     });
   }, [onLock, refreshKey]);
+
+  const lastActivityTouch = useRef(0);
+  useEffect(() => {
+    const recordActivity = () => {
+      const now = performance.now();
+      if (now - lastActivityTouch.current < 10_000) return;
+      lastActivityTouch.current = now;
+      void send({ type: "TOUCH_SESSION" }).then((response) => {
+        if (!response.ok && response.error === "LOCKED") onLock();
+      });
+    };
+    window.addEventListener("pointerdown", recordActivity);
+    window.addEventListener("keydown", recordActivity);
+    return () => {
+      window.removeEventListener("pointerdown", recordActivity);
+      window.removeEventListener("keydown", recordActivity);
+    };
+  }, [onLock]);
+
+  useEffect(() => {
+    const interval = window.setInterval(() => {
+      void send({ type: "STATUS" }).then((response) => {
+        if (!response.ok || !("status" in response) || response.status !== "unlocked") onLock();
+      });
+    }, 5_000);
+    return () => window.clearInterval(interval);
+  }, [onLock]);
 
   return (
     <main className="min-h-[580px] bg-background text-foreground">
@@ -392,8 +502,8 @@ function UnlockedView({ onLock }: { onLock: () => void }) {
           <TabsTrigger value="settings"><Settings className="mr-1 inline" size={14} aria-hidden="true" />Settings</TabsTrigger>
         </TabsList>
         <TabsContent value="vault"><SiteMatches refreshKey={refreshKey} /><VaultList items={items} onChanged={() => setRefreshKey((value) => value + 1)} /></TabsContent>
-        <TabsContent value="generator"><Generator /></TabsContent>
-        <TabsContent value="settings"><SettingsPanel /></TabsContent>
+        <TabsContent value="generator"><Generator onLock={onLock} /></TabsContent>
+        <TabsContent value="settings"><SettingsPanel onLock={onLock} /></TabsContent>
       </Tabs>
     </main>
   );

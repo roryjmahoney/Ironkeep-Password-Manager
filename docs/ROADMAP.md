@@ -6,6 +6,34 @@ stable release.
 
 ## Current implementation
 
+### Completed in 0.4.0
+
+- Configurable automatic lock is enforced on Android, Chromium, and Firefox.
+  The accepted inactivity range is 1–60 minutes and the default remains five
+  minutes.
+- Android uses a monotonic session deadline, resets it only for explicit user
+  interaction, and locks after 15 seconds in the background. Automatic or
+  explicit locking cancels an active biometric prompt and destroys the live
+  vault session.
+- Browser background runtimes own the session deadline, enforce it before every
+  request, lock for browser idle/OS lock and suspension, and rely on worker
+  termination to discard all unlocked state. Status polling never extends a
+  session.
+- Android and browser settings UI now persist auto-lock and clipboard timeouts
+  through the existing atomic encrypted-vault mutation path. These changes
+  increment the vault revision and retain v1 compatibility.
+- Password copies from Android login editing and the browser generator route
+  through an owned secure-clipboard controller. Clearing is configurable from
+  15–120 seconds and occurs only when the clipboard still contains the value
+  Ironkeep wrote, so newer user clipboard content is preserved.
+- Chromium uses an MV3 offscreen document for clipboard access. Firefox uses
+  its extension background page. Both clients declare the required clipboard
+  and idle permissions; Chromium additionally declares `offscreen`.
+- Shared TypeScript and Kotlin tests cover inactivity reset, background grace,
+  setting limits, encrypted setting revision updates, and clipboard ownership.
+- Version metadata updated to `0.4.0` across Android, shared workspaces,
+  Chromium, and Firefox.
+
 ### Completed in 0.3.0
 
 - Android biometric enrollment, unlock, and explicit disable flows are wired
@@ -82,8 +110,8 @@ stable release.
   login capture and save/update prompts are not implemented.
 - CRUD is implemented only for login items. Secure notes, cards, identities,
   categories, and tags do not yet have complete CRUD UI.
-- CSV import/export, onboarding, conflict UI, automatic lock orchestration,
-  master-password change, and vault deletion are not implemented.
+- CSV import/export, onboarding, conflict UI, master-password change, and vault
+  deletion are not implemented.
 
 This remains a pre-audit build. Placeholder controls and incomplete flows must
 not be represented as production-ready.
@@ -95,10 +123,12 @@ not be represented as production-ready.
 - Create/unlock/lock/change-master-password/delete-vault flows.
 - Atomic encrypted persistence with crash and corruption recovery.
 - Automatic lock on timeout, Android backgrounding, browser idle/worker death,
-  OS/browser lock, and explicit lock.
+  OS/browser lock, and explicit lock. Completed in `0.4.0`; lifecycle testing
+  on additional Android and browser versions remains a release gate.
 - Working Android biometric enrollment and authentication-per-use unlock.
   Completed in `0.3.0`; hardware-device coverage remains a release gate.
-- Secure clipboard with configurable clearing and warnings.
+- Secure clipboard with configurable clearing and warnings. Completed in
+  `0.4.0`; clipboard-manager history remains outside Ironkeep's control.
 
 ### Items and organization
 

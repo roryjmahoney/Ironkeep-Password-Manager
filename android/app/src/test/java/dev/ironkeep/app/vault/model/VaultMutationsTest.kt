@@ -41,4 +41,15 @@ class VaultMutationsTest {
         assertEquals(1, VaultMutations.likelyDuplicates(vault, fields.copy(uris = listOf("https://example.com/other"), androidPackageNames = emptyList())).size)
         assertFalse(VaultMutations.likelyDuplicates(vault, fields.copy(title = "Other", username = "other@example.com", uris = listOf("https://other.example"), androidPackageNames = emptyList())).isNotEmpty())
     }
+
+    @Test
+    fun securitySettingsUpdateVaultMetadataOnce() {
+        val empty = VaultPayload.empty("Test", "device-a").copy(revision = 1, updatedAt = "2026-01-01T00:00:00Z")
+        val updated = VaultMutations.updateSecuritySettings(empty, 15, 60, "device-b", Instant.parse("2026-01-02T00:00:00Z"))
+        assertEquals(2, updated.revision)
+        assertEquals("2026-01-02T00:00:00Z", updated.updatedAt)
+        assertEquals("device-b", updated.writerDeviceId)
+        assertEquals(15, updated.settings.autoLockMinutes)
+        assertEquals(60, updated.settings.clearClipboardSeconds)
+    }
 }

@@ -12,11 +12,17 @@ export interface PublicLogin extends PublicVaultItem, LoginFields {
   kind: "login";
 }
 
+export interface PublicSecuritySettings {
+  autoLockMinutes: number;
+  clearClipboardSeconds: number;
+}
+
 export type ExtensionRequest =
   | { type: "STATUS" }
   | { type: "CREATE_VAULT"; masterPassword: string }
   | { type: "UNLOCK"; masterPassword: string }
   | { type: "LOCK" }
+  | { type: "TOUCH_SESSION" }
   | { type: "LIST_ITEMS" }
   | { type: "GET_LOGIN"; itemId: string }
   | { type: "CREATE_LOGIN"; fields: LoginFields; confirmDuplicate: boolean }
@@ -24,11 +30,16 @@ export type ExtensionRequest =
   | { type: "DELETE_LOGIN"; itemId: string; confirmed: boolean }
   | { type: "TOGGLE_LOGIN_FAVORITE"; itemId: string }
   | { type: "GET_MATCHES"; tabId: number }
-  | { type: "FILL_ITEM"; itemId: string; tabId: number };
+  | { type: "FILL_ITEM"; itemId: string; tabId: number }
+  | { type: "GET_SECURITY_SETTINGS" }
+  | { type: "UPDATE_SECURITY_SETTINGS"; settings: PublicSecuritySettings }
+  | { type: "COPY_SECRET"; value: string };
 
 export type ExtensionResponse =
   | { ok: true; status: "empty" | "locked" | "unlocked" }
   | { ok: true; items: PublicVaultItem[] }
   | { ok: true; item: PublicLogin }
+  | { ok: true; settings: PublicSecuritySettings }
+  | { ok: true; copied: true; clearAfterSeconds: number }
   | { ok: false; error: "DUPLICATE"; items: PublicVaultItem[] }
   | { ok: false; error: "AUTHENTICATION_FAILED" | "LOCKED" | "NOT_FOUND" | "INVALID_REQUEST" | "PERSISTENCE_FAILED" };

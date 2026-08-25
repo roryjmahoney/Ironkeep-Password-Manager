@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { createEmptyVault } from "./models.js";
-import { addLogin, deleteLogin, editLogin, findLikelyLoginDuplicates, toggleLoginFavorite } from "./vault-mutations.js";
+import { addLogin, deleteLogin, editLogin, findLikelyLoginDuplicates, toggleLoginFavorite, updateSecuritySettings } from "./vault-mutations.js";
 
 const fields = {
   title: "Example",
@@ -33,5 +33,17 @@ describe("login mutations", () => {
     const vault = addLogin(createEmptyVault("Test", "device-a"), fields, { deviceId: "device-a", itemId: "login-one" });
     expect(findLikelyLoginDuplicates(vault, { ...fields, uris: ["https://example.com/other"], androidPackageNames: [] })).toHaveLength(1);
     expect(findLikelyLoginDuplicates(vault, { ...fields, title: "Other", username: "other@example.com", uris: ["https://other.example"], androidPackageNames: [] })).toHaveLength(0);
+  });
+
+  it("persists security settings as one normal vault revision", () => {
+    const empty = createEmptyVault("Test", "device-a", new Date("2026-01-01T00:00:00.000Z"));
+    const updated = updateSecuritySettings(empty, 15, 60, { deviceId: "device-b", now: new Date("2026-01-02T00:00:00.000Z") });
+    expect(updated).toMatchObject({
+      revision: 2,
+      updatedAt: "2026-01-02T00:00:00.000Z",
+      writerDeviceId: "device-b",
+      settings: { autoLockMinutes: 15, clearClipboardSeconds: 60 },
+    });
+    expect(() => updateSecuritySettings(updated, 0, 60, { deviceId: "device-b" })).toThrow(RangeError);
   });
 });

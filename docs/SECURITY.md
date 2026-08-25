@@ -101,6 +101,26 @@ plaintext while the vault is open; Keystore does not solve a live-device comprom
 JavaScript cannot guarantee heap wiping. Short session lifetime, isolation, and
 minimal message surfaces are the compensating controls.
 
+## Session and clipboard controls
+
+- The inactivity timeout is encrypted vault data and is limited to 1–60
+  minutes. Android and browser runtimes calculate deadlines from monotonic
+  process clocks rather than persisted wall-clock timestamps.
+- Android locks after 15 seconds in the background. Browsers also lock on idle,
+  OS/browser lock, worker suspension or termination, extension reload, and
+  explicit lock. A status check is observation, not activity.
+- Clipboard clearing is limited to 15–120 seconds. Ironkeep clears only the
+  exact value or Android clip label it most recently wrote. A later clipboard
+  write by the user or another application is preserved.
+- Chromium requires `clipboardRead`, `clipboardWrite`, and `offscreen` for its
+  isolated clipboard document. Firefox requires `clipboardRead` and
+  `clipboardWrite`; both manifests require `idle` for lock-state events. These
+  permissions are confined to session safety and do not permit vault logging or
+  page-wide credential capture.
+- Clipboard clearing is best effort. Operating systems, keyboards, clipboard
+  managers, and other applications may retain history before Ironkeep clears
+  the active value.
+
 ## Google Drive and OAuth
 
 Request only `https://www.googleapis.com/auth/drive.appdata`. Store exactly one

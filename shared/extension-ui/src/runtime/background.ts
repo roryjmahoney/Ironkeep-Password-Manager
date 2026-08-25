@@ -6,8 +6,11 @@ import {
   editLogin,
   findLikelyLoginDuplicates,
   persistVaultMutation,
+  SessionDeadline,
+  shouldClearClipboard,
   toggleLoginFavorite,
   unlockVault,
+  updateSecuritySettings,
   type LoginFields,
   type LoginItem,
   type UnlockedVault,
@@ -20,6 +23,116 @@ import type { ExtensionRequest, ExtensionResponse, PublicLogin, PublicVaultItem 
 const STORAGE_KEY = "ironkeep.encryptedVault.v1";
 const DEVICE_KEY = "ironkeep.deviceId";
 let unlockedVault: UnlockedVault | null = null;
+const sessionDeadline = new SessionDeadline();
+const sessionNow = (): number => performance.now();
+let sessionLockTimer: ReturnType<typeof setTimeout> | null = null;
+let clipboardTimer: ReturnType<typeof setTimeout> | null = null;
+let clipboardExpected: string | null = null;
+
+interface OffscreenApi {
+  hasDocument?: () => Promise<boolean>;
+  createDocument(options: { url: string; reasons: string[]; justification: string }): Promise<void>;
+  closeDocument(): Promise<void>;
+}
+
+function offscreenApi(): OffscreenApi | null {
+  return (globalThis as { chrome?: { offscreen?: OffscreenApi } }).chrome?.offscreen ?? null;
+}
+
+function clearSessionTimer(): void {
+  if (sessionLockTimer !== null) clearTimeout(sessionLockTimer);
+  sessionLockTimer = null;
+}
+
+function scheduleSessionLock(): void {
+  clearSessionTimer();
+  if (!unlockedVault) return;
+  const remaining = sessionDeadline.remainingMs(sessionNow(), unlockedVault.payload.settings.autoLockMinutes);
+  if (remaining === null) return;
+  sessionLockTimer = setTimeout(() => {
+    sessionLockTimer = null;
+    enforceSessionDeadline();
+  }, remaining);
+}
+
+function enforceSessionDeadline(): void {
+  if (!unlockedVault) return;
+  if (sessionDeadline.expiryReason(sessionNow(), unlockedVault.payload.settings.autoLockMinutes)) lockVault();
+  else scheduleSessionLock();
+}
+
+function touchSession(): void {
+  if (!unlockedVault) return;
+  sessionDeadline.touch(sessionNow());
+  scheduleSessionLock();
+}
+
+function openSession(session: UnlockedVault): void {
+  unlockedVault?.close();
+  unlockedVault = session;
+  sessionDeadline.open(sessionNow());
+  browser.idle.setDetectionInterval(session.payload.settings.autoLockMinutes * 60);
+  scheduleSessionLock();
+}
+
+function lockVault(): void {
+  clearSessionTimer();
+  sessionDeadline.close();
+  unlockedVault?.close();
+  unlockedVault = null;
+  void clearOwnedClipboard();
+}
+
+async function ensureOffscreenClipboard(): Promise<OffscreenApi> {
+  const offscreen = offscreenApi();
+  if (!offscreen) throw new Error("Offscreen clipboard is unavailable");
+  const exists = offscreen.hasDocument ? await offscreen.hasDocument() : false;
+  if (!exists) {
+    await offscreen.createDocument({
+      url: "clipboard.html",
+      reasons: ["CLIPBOARD"],
+      justification: "Write and clear an Ironkeep-owned password without overwriting newer clipboard content.",
+    });
+  }
+  return offscreen;
+}
+
+async function copySecret(value: string, clearAfterSeconds: number): Promise<boolean> {
+  if (!value) return false;
+  if (offscreenApi()) {
+    await ensureOffscreenClipboard();
+    const response = await browser.runtime.sendMessage({ type: "IRONKEEP_CLIPBOARD_WRITE", value, clearAfterSeconds }) as { ok?: boolean } | undefined;
+    return response?.ok === true;
+  }
+  if (!navigator.clipboard) return false;
+  await navigator.clipboard.writeText(value);
+  if (clipboardTimer !== null) clearTimeout(clipboardTimer);
+  clipboardExpected = value;
+  clipboardTimer = setTimeout(() => { void clearOwnedClipboard(); }, clearAfterSeconds * 1_000);
+  return true;
+}
+
+async function clearOwnedClipboard(): Promise<void> {
+  if (offscreenApi()) {
+    await ensureOffscreenClipboard().then(() => browser.runtime.sendMessage({ type: "IRONKEEP_CLIPBOARD_CLEAR_NOW" })).catch(() => undefined);
+    return;
+  }
+  if (clipboardTimer !== null) clearTimeout(clipboardTimer);
+  clipboardTimer = null;
+  const expected = clipboardExpected;
+  clipboardExpected = null;
+  if (!expected || !navigator.clipboard) return;
+  try {
+    const current = await navigator.clipboard.readText();
+    if (shouldClearClipboard(expected, current)) await navigator.clipboard.writeText("");
+  } catch {
+    // Clipboard clearing is best effort when the browser denies background access.
+  }
+}
+
+function requestTouchesSession(type: ExtensionRequest["type"]): boolean {
+  return type !== "STATUS" && type !== "LOCK";
+}
 
 async function storedFile(): Promise<VaultFile | null> {
   const result = await browser.storage.local.get(STORAGE_KEY);
@@ -96,6 +209,8 @@ async function originForTab(tabId: number): Promise<string | null> {
 }
 
 async function handleRequest(request: ExtensionRequest): Promise<ExtensionResponse> {
+  enforceSessionDeadline();
+  if (unlockedVault && requestTouchesSession(request.type)) touchSession();
   switch (request.type) {
     case "STATUS": {
       if (unlockedVault) return { ok: true, status: "unlocked" };
@@ -112,8 +227,7 @@ async function handleRequest(request: ExtensionRequest): Promise<ExtensionRespon
         created.session.close();
         return { ok: false, error: "PERSISTENCE_FAILED" };
       }
-      unlockedVault?.close();
-      unlockedVault = created.session;
+      openSession(created.session);
       return { ok: true, status: "unlocked" };
     }
     case "UNLOCK": {
@@ -121,18 +235,18 @@ async function handleRequest(request: ExtensionRequest): Promise<ExtensionRespon
       if (!file) return { ok: false, error: "NOT_FOUND" };
       try {
         const session = await unlockVault(request.masterPassword, file);
-        unlockedVault?.close();
-        unlockedVault = session;
+        openSession(session);
         return { ok: true, status: "unlocked" };
       } catch {
-        unlockedVault = null;
+        lockVault();
         return { ok: false, error: "AUTHENTICATION_FAILED" };
       }
     }
     case "LOCK":
-      unlockedVault?.close();
-      unlockedVault = null;
+      lockVault();
       return { ok: true, status: (await storedFile()) ? "locked" : "empty" };
+    case "TOUCH_SESSION":
+      return unlockedVault ? { ok: true, status: "unlocked" } : { ok: false, error: "LOCKED" };
     case "LIST_ITEMS":
       return unlockedVault
         ? { ok: true, items: unlockedVault.payload.items.map(publicItem) }
@@ -212,11 +326,68 @@ async function handleRequest(request: ExtensionRequest): Promise<ExtensionRespon
       }, { frameId: 0 });
       return { ok: true, status: "unlocked" };
     }
+    case "GET_SECURITY_SETTINGS":
+      return unlockedVault
+        ? {
+            ok: true,
+            settings: {
+              autoLockMinutes: unlockedVault.payload.settings.autoLockMinutes,
+              clearClipboardSeconds: unlockedVault.payload.settings.clearClipboardSeconds,
+            },
+          }
+        : { ok: false, error: "LOCKED" };
+    case "UPDATE_SECURITY_SETTINGS": {
+      if (!unlockedVault) return { ok: false, error: "LOCKED" };
+      try {
+        const next = updateSecuritySettings(
+          unlockedVault.payload,
+          request.settings.autoLockMinutes,
+          request.settings.clearClipboardSeconds,
+          { deviceId: await deviceId() },
+        );
+        if (!await persist(next)) return { ok: false, error: "PERSISTENCE_FAILED" };
+        sessionDeadline.touch(sessionNow());
+        browser.idle.setDetectionInterval(next.settings.autoLockMinutes * 60);
+        scheduleSessionLock();
+        return {
+          ok: true,
+          settings: {
+            autoLockMinutes: next.settings.autoLockMinutes,
+            clearClipboardSeconds: next.settings.clearClipboardSeconds,
+          },
+        };
+      } catch {
+        return { ok: false, error: "INVALID_REQUEST" };
+      }
+    }
+    case "COPY_SECRET": {
+      if (!unlockedVault) return { ok: false, error: "LOCKED" };
+      try {
+        const copied = await copySecret(request.value, unlockedVault.payload.settings.clearClipboardSeconds);
+        return copied
+          ? { ok: true, copied: true, clearAfterSeconds: unlockedVault.payload.settings.clearClipboardSeconds }
+          : { ok: false, error: "INVALID_REQUEST" };
+      } catch {
+        return { ok: false, error: "INVALID_REQUEST" };
+      }
+    }
   }
 }
 
 export function installBackground(): void {
+  browser.idle.onStateChanged.addListener((state) => {
+    if (state === "idle" || state === "locked") lockVault();
+  });
+  browser.runtime.onSuspend.addListener(lockVault);
   browser.runtime.onMessage.addListener((rawRequest: unknown) => {
+    if (rawRequest && typeof rawRequest === "object" && "type" in rawRequest) {
+      if (rawRequest.type === "IRONKEEP_CLIPBOARD_WRITE" || rawRequest.type === "IRONKEEP_CLIPBOARD_CLEAR_NOW") return undefined;
+      if (rawRequest.type === "IRONKEEP_CLIPBOARD_FINISHED") {
+        const offscreen = offscreenApi();
+        if (offscreen) void offscreen.closeDocument().catch(() => undefined);
+        return undefined;
+      }
+    }
     if (!rawRequest || typeof rawRequest !== "object" || !("type" in rawRequest)) {
       return Promise.resolve({ ok: false, error: "INVALID_REQUEST" } satisfies ExtensionResponse);
     }

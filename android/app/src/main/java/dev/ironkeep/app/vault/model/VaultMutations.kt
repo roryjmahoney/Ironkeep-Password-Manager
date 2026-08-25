@@ -3,6 +3,7 @@ package dev.ironkeep.app.vault.model
 import java.net.URI
 import java.time.Instant
 import java.util.UUID
+import dev.ironkeep.app.vault.session.SessionSecurity
 
 data class LoginFields(
     val title: String,
@@ -70,6 +71,23 @@ object VaultMutations {
         return payload.next(deviceId, timestamp).copy(items = payload.items.map { item ->
             if (item.id != itemId) item else existing.copy(favorite = !existing.favorite, updatedAt = timestamp, revision = existing.revision + 1)
         })
+    }
+
+    fun updateSecuritySettings(
+        payload: VaultPayload,
+        autoLockMinutes: Int,
+        clearClipboardSeconds: Int,
+        deviceId: String,
+        now: Instant = Instant.now(),
+    ): VaultPayload {
+        SessionSecurity.validate(autoLockMinutes, clearClipboardSeconds)
+        val timestamp = now.toString()
+        return payload.next(deviceId, timestamp).copy(
+            settings = payload.settings.copy(
+                autoLockMinutes = autoLockMinutes,
+                clearClipboardSeconds = clearClipboardSeconds,
+            ),
+        )
     }
 
     fun likelyDuplicates(payload: VaultPayload, fields: LoginFields, excludeItemId: String? = null): List<LoginItem> {

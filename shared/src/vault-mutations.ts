@@ -1,4 +1,5 @@
 import type { LoginItem, VaultPayload } from "./models.js";
+import { validateSecuritySettings } from "./session-security.js";
 
 export interface LoginFields {
   title: string;
@@ -97,6 +98,21 @@ export function toggleLoginFavorite(payload: VaultPayload, itemId: string, conte
   return {
     ...next,
     items: payload.items.map((item) => item.id === itemId ? { ...existing, favorite: !existing.favorite, updatedAt, revision: existing.revision + 1 } : item),
+  };
+}
+
+export function updateSecuritySettings(
+  payload: VaultPayload,
+  autoLockMinutes: number,
+  clearClipboardSeconds: number,
+  context: MutationContext,
+): VaultPayload {
+  validateSecuritySettings(autoLockMinutes, clearClipboardSeconds);
+  const updatedAt = timestamp(context);
+  const next = nextVault(payload, context, updatedAt);
+  return {
+    ...next,
+    settings: { ...payload.settings, autoLockMinutes, clearClipboardSeconds },
   };
 }
 
