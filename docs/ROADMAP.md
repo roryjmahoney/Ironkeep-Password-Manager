@@ -49,6 +49,33 @@ misrepresented as complete.
   association, dataset selection, save prompt, and phishing-safe warnings.
 - Browser username/password detection, user-selected fill, save/update prompt,
   exact origin rules, iframe policy, keyboard navigation, and accessible overlay.
+- Detect sign-up and password-change forms, offer an Ironkeep-generated password,
+  and show a save-or-update prompt after the user submits or Android commits the
+  autofill context. Never save a credential without explicit confirmation.
+- Detect login forms and offer only entries associated with the verified exact
+  website origin or Android application. When the user selects an entry, fill
+  every recognized identifier field (username, email address, or phone number)
+  and its password, but never submit the form automatically.
+- If several accounts match, show an account chooser without exposing passwords.
+  Do not silently choose the most recent account or overwrite another account.
+- After submission with credentials that do not match the selected or stored
+  entry, prompt with explicit **Save as new login**, **Update existing login**,
+  and **Not now** actions. Default toward a new item for a different identifier;
+  suggest updating when the identifier matches and only the password changed.
+- Browser capture uses scoped content-script form events; Android capture uses
+  `AutofillService` save metadata and `onSaveRequest`. Ironkeep must not install
+  global keyboard hooks, act as an input method, use an Accessibility Service to
+  observe typing, retain keystroke history, or log field values.
+- Keep candidate credentials only in short-lived memory until confirmation.
+  The confirmation screen shows the username, exact site origin or Android
+  package, proposed title, and whether Ironkeep will create or update an item.
+- Suggest human-readable names from the verified website hostname or installed
+  application label. Use the current site's declared icon, the installed app's
+  local icon, or a reviewed bundled icon catalog; never contact an Ironkeep or
+  third-party logo server and never trust an icon to establish identity.
+- Handle multiple accounts and duplicate matches explicitly. Successful form
+  submission is a prompt signal, not proof that authentication or registration
+  succeeded, and must never trigger silent storage.
 - No automatic submission and no fill on insecure origins without confirmation.
 
 ### Import/export
