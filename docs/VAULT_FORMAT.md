@@ -107,6 +107,11 @@ confirmed save or update is an ordinary login mutation using the existing v1
 rules. Unconfirmed candidates are short-lived browser memory and must never be
 serialized into the vault, extension storage, or sync metadata.
 
+Android credential capture introduced in 0.6.0 also adds no payload fields.
+Confirmed Android saves and updates use the same ordinary login mutation rules.
+Unconfirmed Android candidates are short-lived process memory and must never be
+placed in an Intent, the vault, local files, logs, or sync metadata.
+
 Secrets are ordinary fields only inside the encrypted payload. Token/provider
 credentials and biometric blobs are device-local and must never be added.
 

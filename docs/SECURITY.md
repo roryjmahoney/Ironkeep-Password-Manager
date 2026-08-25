@@ -111,6 +111,29 @@ plaintext while the vault is open; Keystore does not solve a live-device comprom
 JavaScript cannot guarantee heap wiping. Short session lifetime, isolation, and
 minimal message surfaces are the compensating controls.
 
+## Android Autofill capture boundary
+
+- Save metadata requires a visible, enabled password field associated with a
+  native package or an exact HTTPS web origin. HTTP web contexts and Ironkeep's
+  own fields are excluded. A locked response contains no vault data; it exposes
+  only an **Unlock Ironkeep** action backed by `BIOMETRIC_STRONG` and a
+  `BiometricPrompt.CryptoObject`.
+- `onSaveRequest` reads the latest `AutofillValue` values. New-password fields
+  override current-password fields, and mismatched confirmation values fail
+  closed.
+- One candidate is held only in process memory for at most two minutes. The
+  one-shot confirmation Intent contains a random token, never credentials.
+- The non-exported confirmation activity displays the verified target and
+  identifier but never the password. Creation, each possible exact-target
+  update, and dismissal are separate explicit actions.
+- Fill authentication closes its per-use vault session immediately after the
+  populated Android response is built. Save authentication keeps its session
+  only while the non-exported confirmation activity remains foregrounded.
+- Lock, timeout, dismissal, success, or a newer candidate wipes the pending
+  password buffer. No candidate is logged or persisted before confirmation.
+- Confirmed changes use the same serialized, atomic encrypted Login mutation
+  path as the main Android UI. Failed writes preserve the previous vault.
+
 ## Session and clipboard controls
 
 - The inactivity timeout is encrypted vault data and is limited to 1–60

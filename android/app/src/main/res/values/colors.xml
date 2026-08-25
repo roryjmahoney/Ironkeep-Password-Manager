@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <color name="autofill_presentation_surface">#171A1B</color>
+    <color name="autofill_presentation_text">#F6F3EA</color>
+</resources>

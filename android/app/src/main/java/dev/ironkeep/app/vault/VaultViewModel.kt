@@ -1,10 +1,10 @@
 package dev.ironkeep.app.vault
 
 import android.app.Application
-import android.content.Context
 import android.os.SystemClock
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
+import dev.ironkeep.app.autofill.AutofillPendingSaveStore
 import dev.ironkeep.app.vault.crypto.BiometricKeyStore
 import dev.ironkeep.app.vault.crypto.BiometricVaultBinding
 import dev.ironkeep.app.vault.crypto.BiometricVaultRecord
@@ -15,9 +15,12 @@ import dev.ironkeep.app.vault.model.VaultFile
 import dev.ironkeep.app.vault.model.VaultMutations
 import dev.ironkeep.app.vault.model.VaultPayload
 import dev.ironkeep.app.vault.session.SecureClipboard
+import dev.ironkeep.app.vault.session.DeviceIdProvider
 import dev.ironkeep.app.vault.session.SessionDeadline
 import dev.ironkeep.app.vault.session.SessionExpiryReason
 import dev.ironkeep.app.vault.session.VaultPersistence
+import dev.ironkeep.app.vault.session.VaultMutationCoordinator
+import dev.ironkeep.app.vault.session.VaultMutationResult
 import dev.ironkeep.app.vault.session.VaultSessionHolder
 import dev.ironkeep.app.vault.storage.BiometricVaultStore
 import dev.ironkeep.app.vault.storage.VaultFileStore
@@ -30,8 +33,6 @@ import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
-import kotlinx.coroutines.sync.Mutex
-import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import javax.crypto.Cipher
@@ -65,9 +66,10 @@ class VaultViewModel(application: Application) : AndroidViewModel(application) {
     private val biometricKeyStore = BiometricKeyStore()
     private val biometricStore = BiometricVaultStore(application, crypto.json)
     private val persistence = VaultPersistence(crypto, store)
+    private val mutationCoordinator = VaultMutationCoordinator(persistence)
     private val sessionDeadline = SessionDeadline()
     private val secureClipboard = SecureClipboard(application, viewModelScope)
-    private val mutationMutex = Mutex()
+    private val deviceIdProvider = DeviceIdProvider(application)
     private val mutableState = MutableStateFlow<VaultUiState>(VaultUiState.Loading)
     val state: StateFlow<VaultUiState> = mutableState.asStateFlow()
     private val mutableBiometricRequests = MutableSharedFlow<BiometricPromptRequest>(extraBufferCapacity = 1)
@@ -150,6 +152,10 @@ class VaultViewModel(application: Application) : AndroidViewModel(application) {
 
     fun onForeground() {
         val session = VaultSessionHolder.sessionOrNull() ?: return
+        val current = mutableState.value as? VaultUiState.Unlocked
+        if (current != null && current.vault.revision != session.payload.revision) {
+            mutableState.value = current.copy(vault = session.payload, error = null, notice = "Vault updated by Android Autofill.")
+        }
         val reason = sessionDeadline.expiryReason(SystemClock.elapsedRealtime(), session.payload.settings.autoLockMinutes)
         if (reason != null) {
             viewModelScope.launch { lockSession(reason) }
@@ -285,21 +291,22 @@ class VaultViewModel(application: Application) : AndroidViewModel(application) {
     private fun mutate(notice: String? = null, transform: (VaultPayload) -> VaultPayload) {
         recordUserActivity()
         viewModelScope.launch {
-            mutationMutex.withLock {
-                val session = VaultSessionHolder.sessionOrNull()
-                if (session == null) {
+            val biometricEnabled = (mutableState.value as? VaultUiState.Unlocked)?.biometricEnabled == true
+            when (val result = mutationCoordinator.mutate(transform)) {
+                VaultMutationResult.Locked -> {
                     mutableState.value = VaultUiState.Locked(biometricMaterialPresent())
-                    return@withLock
                 }
-                val previous = session.payload
-                val biometricEnabled = (mutableState.value as? VaultUiState.Unlocked)?.biometricEnabled == true
-                try {
-                    val next = withContext(Dispatchers.Default) { transform(previous) }
-                    withContext(Dispatchers.IO) { persistence.persist(session, next) }
-                    mutableState.value = VaultUiState.Unlocked(next, notice = notice, biometricEnabled = biometricEnabled)
+
+                is VaultMutationResult.Success -> {
+                    mutableState.value = VaultUiState.Unlocked(result.payload, notice = notice, biometricEnabled = biometricEnabled)
                     scheduleSessionLock()
-                } catch (_: Exception) {
-                    mutableState.value = VaultUiState.Unlocked(previous, "Encrypted vault could not be saved. Previous data is intact.", biometricEnabled = biometricEnabled)
+                }
+
+                VaultMutationResult.Failed -> {
+                    val previous = VaultSessionHolder.sessionOrNull()?.payload
+                    mutableState.value = if (previous == null) VaultUiState.Locked(biometricMaterialPresent()) else {
+                        VaultUiState.Unlocked(previous, "Encrypted vault could not be saved. Previous data is intact.", biometricEnabled = biometricEnabled)
+                    }
                 }
             }
         }
@@ -311,6 +318,7 @@ class VaultViewModel(application: Application) : AndroidViewModel(application) {
         secureClipboard.clearOwned()
         if (pendingBiometric is PendingBiometric.Enrollment) clearBiometricMaterial()
         pendingBiometric = null
+        AutofillPendingSaveStore.clear()
         VaultSessionHolder.lock()
         super.onCleared()
     }
@@ -424,13 +432,14 @@ class VaultViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     private suspend fun lockSession(reason: SessionExpiryReason?) {
-        mutationMutex.withLock {
+        mutationCoordinator.withSessionLock {
             sessionLockJob?.cancel()
             sessionLockJob = null
             val pending = pendingBiometric.also { pendingBiometric = null }
             if (pending != null) mutableBiometricCancelRequests.tryEmit(Unit)
             if (pending is PendingBiometric.Enrollment) withContext(Dispatchers.IO) { clearBiometricMaterial() }
             secureClipboard.clearOwned()
+            AutofillPendingSaveStore.clear()
             VaultSessionHolder.lock()
             sessionDeadline.close()
             val message = when (reason) {
@@ -454,11 +463,5 @@ class VaultViewModel(application: Application) : AndroidViewModel(application) {
         biometricRequestStarting = false
     }
 
-    private fun deviceId(): String {
-        val preferences = getApplication<Application>().getSharedPreferences("ironkeep.device", Context.MODE_PRIVATE)
-        preferences.getString("id", null)?.let { return it }
-        val created = java.util.UUID.randomUUID().toString()
-        if (!preferences.edit().putString("id", created).commit()) error("Could not persist device identifier")
-        return created
-    }
+    private fun deviceId(): String = deviceIdProvider.id()
 }

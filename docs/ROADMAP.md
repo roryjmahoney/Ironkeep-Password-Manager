@@ -6,6 +6,33 @@ stable release.
 
 ## Current implementation
 
+### Completed in 0.6.0
+
+- Android Autofill responses now register password save metadata for verified
+  native packages and exact HTTPS web origins even after the normal background
+  grace locks the vault.
+- Locked fill responses expose only **Unlock Ironkeep**. Selecting it performs
+  authentication-per-use fingerprint decryption and returns exact-target
+  datasets to Android; save confirmation independently authenticates when the
+  vault locked before form submission.
+- Save requests prefer new-password fields, reject mismatched confirmations and
+  insecure/malformed targets, and read only current `AutofillValue` data.
+- Android's save sheet continues into a non-exported Ironkeep confirmation
+  activity using a one-shot token-only Intent. Passwords never enter the Intent
+  or confirmation UI.
+- The confirmation screen offers explicit **Save as new login**, one update
+  action per existing exact-target account, and **Not now**. Duplicate creation
+  requires a second confirmation.
+- One memory-only candidate expires after two minutes and is wiped on lock,
+  dismissal, success, replacement, or timeout.
+- Confirmed saves reuse Login CRUD and the same serialized atomic encrypted
+  persistence path as the main app. Unchanged credentials do not rewrite the
+  vault.
+- Tests cover field classification, HTTPS normalization, lookalike rejection,
+  create/update preservation, unchanged detection, and candidate expiry wiping.
+- Android version metadata is `0.6.0` / version code 7; Chromium and Firefox
+  manifests report `0.6.0` with no browser runtime change.
+
 ### Completed in 0.5.0
 
 - Chromium and Firefox content scripts detect scoped top-frame HTTPS login,
@@ -138,9 +165,9 @@ stable release.
 ### Known incomplete or placeholder behavior
 
 - Google Drive buttons and OAuth client configuration remain placeholders.
-- Android `AutofillService.onSaveRequest` remains a no-op. Browser capture is
-  implemented for ordinary top-frame HTTPS forms, but broader hostile-site and
-  framework coverage remains a release gate.
+- Android and browser capture are implemented for scoped ordinary forms, but
+  broader hostile-site, framework, and lifecycle coverage remains a release
+  gate. Android generated-password suggestions remain open.
 - CRUD is implemented only for login items. Secure notes, cards, identities,
   categories, and tags do not yet have complete CRUD UI.
 - CSV import/export, onboarding, conflict UI, master-password change, and vault
@@ -150,6 +177,21 @@ This remains a pre-audit build. Placeholder controls and incomplete flows must
 not be represented as production-ready.
 
 ## MVP — required before 1.0
+
+### Onboarding and device setup
+
+- Android onboarding must verify that Ironkeep is the selected Autofill service
+  and open the system provider picker when it is not.
+- Add an optional Android battery-usage page to onboarding. Explain why allowing
+  unrestricted background use can improve Autofill availability, then ask
+  whether the user wants to configure it. **Yes** opens the supported Android
+  battery settings surface so the user can choose **Unrestricted**. **No** or
+  **Skip** advances to the next onboarding page without changing anything.
+  Ironkeep must never change the setting silently, and should fall back to its
+  app-details screen when a direct per-app battery page is unavailable.
+- Do not request a direct Doze exemption unless hardware testing proves that
+  normal Autofill operation cannot work without it and the release satisfies
+  Google Play's restricted exemption policy.
 
 ### Vault and session
 
@@ -182,7 +224,8 @@ not be represented as production-ready.
   framework compatibility testing remains required before 1.0.
 - Detect sign-up and password-change forms, offer an Ironkeep-generated password,
   and show a save-or-update prompt after the user submits or Android commits the
-  autofill context. Browser support completed in `0.5.0`; Android remains open.
+  autofill context. Browser support completed in `0.5.0`; Android save/update
+  capture completed in `0.6.0`, while Android password generation remains open.
   Never save a credential without explicit confirmation.
 - Detect login forms and offer only entries associated with the verified exact
   website origin or Android application. When the user selects an entry, fill

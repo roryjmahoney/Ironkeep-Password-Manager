@@ -97,6 +97,36 @@ Same-origin navigation may retrieve the pending prompt. Confirmed actions flow
 through the same shared login mutations and atomic encrypted persistence used by
 the popup CRUD UI.
 
+### Android capture lifecycle
+
+The Autofill service advertises Android `SaveInfo` whenever a visible, enabled
+password field belongs to a verified native package or HTTPS web origin. If the
+vault has already locked, the response exposes only an **Unlock Ironkeep**
+authentication action. A non-exported activity uses the existing
+authentication-per-use Keystore key and `BiometricPrompt.CryptoObject`, returns
+the populated response to Android, and closes the short-lived vault session.
+New-password fields take precedence over current password fields, so
+password-change forms save the replacement value.
+
+After the user continues from Android's save sheet, `onSaveRequest` reads only
+current `AutofillValue` data and places one candidate in process memory for at
+most two minutes. A one-shot `IntentSender` contains only a random token and
+opens a non-exported Ironkeep confirmation activity. The screen shows the exact
+target and identifier but never the password, and requires **Save as new**,
+an explicit existing-account update, or **Not now**. Duplicate creation needs a
+second confirmation. Lock, dismissal, timeout, success, or replacement wipes
+the candidate.
+
+If the background grace locked the vault before submission, the confirmation
+activity performs the same per-use fingerprint unlock before exposing save
+choices. Its temporary session closes when the activity stops or finishes.
+
+Confirmed Android saves share the serialized mutation coordinator used by the
+main app, then reuse existing Login CRUD and atomic encrypted persistence. An
+unchanged exact-target credential is discarded without a vault rewrite. HTTP
+web contexts, Ironkeep's own fields, malformed targets, mismatched confirmation
+passwords, and expired or cross-vault candidates fail closed.
+
 ### Session and clipboard lifecycle
 
 Android's activity reports foreground/background transitions and user

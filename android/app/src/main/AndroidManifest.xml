@@ -22,6 +22,17 @@
             </intent-filter>
         </activity>
 
+        <activity
+            android:name=".autofill.AutofillSaveActivity"
+            android:excludeFromRecents="true"
+            android:exported="false"
+            android:noHistory="true" />
+        <activity
+            android:name=".autofill.AutofillAuthActivity"
+            android:excludeFromRecents="true"
+            android:exported="false"
+            android:noHistory="true" />
+
         <service
             android:name=".autofill.IronkeepAutofillService"
             android:exported="true"
