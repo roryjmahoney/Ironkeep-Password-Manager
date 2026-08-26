@@ -118,6 +118,12 @@ minimal message surfaces are the compensating controls.
   own fields are excluded. A locked response contains no vault data; it exposes
   only an **Unlock Ironkeep** action backed by `BIOMETRIC_STRONG` and a
   `BiometricPrompt.CryptoObject`.
+- After unlock, verified new-password fields may expose a local
+  generated-password dataset using the vault's encrypted generator settings. It
+  fills only new/confirmation fields, disables sensitive-value filtering, and
+  shows no password in its presentation. Ironkeep does not cache, log, copy,
+  place in an Intent, or persist the generated value before explicit save
+  confirmation.
 - `onSaveRequest` reads the latest `AutofillValue` values. New-password fields
   override current-password fields, and mismatched confirmation values fail
   closed.

@@ -2,4 +2,5 @@
     <string name="app_name">Ironkeep</string>
     <string name="autofill_service_name">Ironkeep Autofill</string>
     <string name="autofill_unlock">Unlock Ironkeep</string>
+    <string name="autofill_generate_password">Use strong password</string>
 </resources>

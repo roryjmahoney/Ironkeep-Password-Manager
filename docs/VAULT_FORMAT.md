@@ -112,6 +112,11 @@ Confirmed Android saves and updates use the same ordinary login mutation rules.
 Unconfirmed Android candidates are short-lived process memory and must never be
 placed in an Intent, the vault, local files, logs, or sync metadata.
 
+Android generated-password suggestions introduced in 0.7.0 add no payload
+fields. Generation reads the existing encrypted generator settings after unlock.
+A generated value enters the vault only through the ordinary explicit Android
+save/update confirmation path.
+
 Secrets are ordinary fields only inside the encrypted payload. Token/provider
 credentials and biometric blobs are device-local and must never be added.
 

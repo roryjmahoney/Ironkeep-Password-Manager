@@ -6,6 +6,28 @@ stable release.
 
 ## Current implementation
 
+### Completed in 0.7.0
+
+- Android Autofill now offers **Use strong password** only when a visible,
+  enabled new-password field belongs to a verified native package or exact HTTPS
+  web origin.
+- One locally generated password fills every detected new/confirmation field in
+  the dataset. Ironkeep does not fill current-password or identifier fields and
+  never submits the form.
+- Generation uses Android's CSPRNG, guarantees every enabled character class,
+  enforces the existing 8–256 character limit, and honors unlocked vault
+  generator settings. A locked response remains **Unlock Ironkeep** only and
+  exposes no vault data or generated secret.
+- The Autofill presentation shows only the action label, never the generated
+  password. Generated values are not logged, copied, placed in an Intent, or
+  persisted by Ironkeep before the existing explicit save/update confirmation.
+- Sensitive dataset filtering is disabled so typed password prefixes cannot
+  filter or reveal the suggestion value.
+- Kotlin tests cover default class coverage, ambiguous-character exclusion,
+  selected character classes, requested length, and invalid configurations.
+- Android version metadata is `0.7.0` / version code 8; Chromium and Firefox
+  manifests report `0.7.0` with no browser runtime change.
+
 ### Completed in 0.6.0
 
 - Android Autofill responses now register password save metadata for verified
@@ -165,9 +187,9 @@ stable release.
 ### Known incomplete or placeholder behavior
 
 - Google Drive buttons and OAuth client configuration remain placeholders.
-- Android and browser capture are implemented for scoped ordinary forms, but
-  broader hostile-site, framework, and lifecycle coverage remains a release
-  gate. Android generated-password suggestions remain open.
+- Android and browser capture plus generated-password suggestions are
+  implemented for scoped ordinary forms, but broader hostile-site, framework,
+  and lifecycle coverage remains a release gate.
 - CRUD is implemented only for login items. Secure notes, cards, identities,
   categories, and tags do not yet have complete CRUD UI.
 - CSV import/export, onboarding, conflict UI, master-password change, and vault
@@ -225,8 +247,8 @@ not be represented as production-ready.
 - Detect sign-up and password-change forms, offer an Ironkeep-generated password,
   and show a save-or-update prompt after the user submits or Android commits the
   autofill context. Browser support completed in `0.5.0`; Android save/update
-  capture completed in `0.6.0`, while Android password generation remains open.
-  Never save a credential without explicit confirmation.
+  capture completed in `0.6.0`; Android password generation completed in
+  `0.7.0`. Never save a credential without explicit confirmation.
 - Detect login forms and offer only entries associated with the verified exact
   website origin or Android application. When the user selects an entry, fill
   every recognized identifier field (username, email address, or phone number)

@@ -20,9 +20,11 @@ import android.view.autofill.AutofillId
 import android.view.autofill.AutofillValue
 import android.widget.RemoteViews
 import dev.ironkeep.app.R
-import dev.ironkeep.app.vault.session.VaultSessionHolder
 import dev.ironkeep.app.vault.crypto.VaultCrypto
+import dev.ironkeep.app.vault.generator.PasswordGenerator
+import dev.ironkeep.app.vault.model.PasswordGeneratorOptions
 import dev.ironkeep.app.vault.model.VaultPayload
+import dev.ironkeep.app.vault.session.VaultSessionHolder
 import dev.ironkeep.app.vault.storage.VaultFileStore
 
 class IronkeepAutofillService : AutofillService() {
@@ -114,6 +116,7 @@ class IronkeepAutofillService : AutofillService() {
 internal fun buildUnlockedFillResponse(context: Context, fields: DetectedFields, payload: VaultPayload): FillResponse {
     val target = requireNotNull(fields.target())
     val response = FillResponse.Builder().setSaveInfo(fields.saveInfo())
+    generatedPasswordDataset(context, fields, payload.settings.generator)?.let(response::addDataset)
     if (fields.currentPasswordIds.isNotEmpty()) {
         AutofillSavePlanner.matchingLogins(payload, target).forEach { login ->
             val presentation = autofillPresentation(context, login.title)
@@ -124,6 +127,22 @@ internal fun buildUnlockedFillResponse(context: Context, fields: DetectedFields,
         }
     }
     return response.build()
+}
+
+@Suppress("DEPRECATION") // RemoteViews overloads retain the Android 9-12 compatibility path.
+private fun generatedPasswordDataset(
+    context: Context,
+    fields: DetectedFields,
+    options: PasswordGeneratorOptions,
+): Dataset? {
+    if (fields.newPasswordIds.isEmpty()) return null
+    val password = runCatching { PasswordGenerator.generate(options) }.getOrNull() ?: return null
+    val presentation = autofillPresentation(context, context.getString(R.string.autofill_generate_password))
+    return Dataset.Builder(presentation).apply {
+        fields.newPasswordIds.forEach { id ->
+            setValue(id, AutofillValue.forText(password), null, presentation)
+        }
+    }.build()
 }
 
 private fun autofillPresentation(context: Context, label: String): RemoteViews =

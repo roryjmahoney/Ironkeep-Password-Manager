@@ -108,6 +108,14 @@ the populated response to Android, and closes the short-lived vault session.
 New-password fields take precedence over current password fields, so
 password-change forms save the replacement value.
 
+After unlock, a verified target with visible new-password fields also receives
+one **Use strong password** dataset. It fills only the new/confirmation fields
+with one Android-CSPRNG value and never fills identifiers, current-password
+fields, or submits the form. The unlocked vault supplies its encrypted generator
+settings. The presentation never renders the password, and Ironkeep does not
+cache, log, copy, send by Intent, or persist the generated value before confirmed
+save.
+
 After the user continues from Android's save sheet, `onSaveRequest` reads only
 current `AutofillValue` data and places one candidate in process memory for at
 most two minutes. A one-shot `IntentSender` contains only a random token and
