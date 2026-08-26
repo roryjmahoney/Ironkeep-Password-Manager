@@ -117,6 +117,13 @@ fields. Generation reads the existing encrypted generator settings after unlock.
 A generated value enters the vault only through the ordinary explicit Android
 save/update confirmation path.
 
+Android `.ikv` snapshots introduced in 0.8.0 copy the existing encrypted v1
+envelope without decrypting it or creating another payload format. Restore
+metadata is derived only after the selected envelope and payload authenticate.
+The checksum shown to the user is SHA-256 over the exact selected encrypted
+bytes. The prior active envelope is preserved in private app storage before the
+atomic active-file replacement.
+
 Secrets are ordinary fields only inside the encrypted payload. Token/provider
 credentials and biometric blobs are device-local and must never be added.
 

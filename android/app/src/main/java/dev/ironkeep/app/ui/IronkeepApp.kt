@@ -2,6 +2,8 @@ package dev.ironkeep.app.ui
 
 import android.content.Context
 import android.content.ContextWrapper
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.core.spring
 import androidx.compose.animation.fadeIn
@@ -79,6 +81,7 @@ import androidx.biometric.BiometricPrompt
 import androidx.core.content.ContextCompat
 import androidx.fragment.app.FragmentActivity
 import dev.ironkeep.app.vault.BiometricPurpose
+import dev.ironkeep.app.vault.BackupUiState
 import dev.ironkeep.app.vault.VaultUiState
 import dev.ironkeep.app.vault.VaultViewModel
 import dev.ironkeep.app.vault.model.LoginFields
@@ -89,7 +92,14 @@ import dev.ironkeep.app.vault.model.VaultMutations
 @Composable
 fun IronkeepApp(viewModel: VaultViewModel) {
     val state by viewModel.state.collectAsStateWithLifecycle()
+    val backupState by viewModel.backupState.collectAsStateWithLifecycle()
     val activity = LocalContext.current.findFragmentActivity()
+    val createBackup = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("application/vnd.ironkeep.vault")) { uri ->
+        if (uri != null) viewModel.exportSnapshot(uri)
+    }
+    val openBackup = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+        if (uri != null) viewModel.loadRestore(uri)
+    }
     val biometricPrompt = remember(activity, viewModel) {
         BiometricPrompt(
             activity,
@@ -163,6 +173,12 @@ fun IronkeepApp(viewModel: VaultViewModel) {
                 onEnableBiometric = viewModel::requestBiometricEnrollment,
                 onDisableBiometric = viewModel::disableBiometricUnlock,
                 onUpdateSecuritySettings = viewModel::updateSecuritySettings,
+                backupState = backupState,
+                onCreateBackup = { createBackup.launch("ironkeep-backup-${current.vault.revision}.ikv") },
+                onChooseRestore = { openBackup.launch(arrayOf("application/vnd.ironkeep.vault", "application/json", "application/octet-stream")) },
+                onAuthenticateRestore = viewModel::authenticateRestore,
+                onConfirmRestore = viewModel::confirmRestore,
+                onCancelRestore = viewModel::cancelRestore,
                 onCopyPassword = viewModel::copyPassword,
                 onLock = viewModel::lock,
             )
@@ -296,6 +312,12 @@ private fun VaultHome(
     onEnableBiometric: () -> Unit,
     onDisableBiometric: () -> Unit,
     onUpdateSecuritySettings: (Int, Int) -> Unit,
+    backupState: BackupUiState,
+    onCreateBackup: () -> Unit,
+    onChooseRestore: () -> Unit,
+    onAuthenticateRestore: (CharArray) -> Unit,
+    onConfirmRestore: () -> Unit,
+    onCancelRestore: () -> Unit,
     onCopyPassword: (String) -> Unit,
     onLock: () -> Unit,
 ) {
@@ -472,6 +494,20 @@ private fun VaultHome(
                         ) { Text("Change") }
                     }
                     HorizontalDivider(color = MaterialTheme.colorScheme.outline)
+                    Column(Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 16.dp)) {
+                        Text("Encrypted backups", style = MaterialTheme.typography.titleSmall)
+                        Text(
+                            "Create or restore an encrypted .ikv snapshot using Android's file picker.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.padding(top = 4.dp, bottom = 12.dp),
+                        )
+                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            OutlinedButton(onClick = onCreateBackup, shape = RectangleShape, modifier = Modifier.height(48.dp)) { Text("Create backup") }
+                            OutlinedButton(onClick = onChooseRestore, shape = RectangleShape, modifier = Modifier.height(48.dp)) { Text("Restore") }
+                        }
+                    }
+                    HorizontalDivider(color = MaterialTheme.colorScheme.outline)
                 }
             }
         }
@@ -523,6 +559,60 @@ private fun VaultHome(
             },
         )
     }
+    when (backupState) {
+        BackupUiState.Idle -> Unit
+        BackupUiState.Reading -> AlertDialog(
+            onDismissRequest = {},
+            title = { Text("Checking encrypted backup") },
+            text = { Row(verticalAlignment = Alignment.CenterVertically) { CircularProgressIndicator(Modifier.size(24.dp)); Text("Validating locally…", modifier = Modifier.padding(start = 12.dp)) } },
+            confirmButton = {},
+        )
+        BackupUiState.PasswordRequired -> RestorePasswordDialog(onCancelRestore, onAuthenticateRestore)
+        is BackupUiState.Preview -> RestorePreviewDialog(backupState.details, onCancelRestore, onConfirmRestore)
+    }
+}
+
+@Composable
+private fun RestorePasswordDialog(onCancel: () -> Unit, onSubmit: (CharArray) -> Unit) {
+    var password by remember { mutableStateOf("") }
+    AlertDialog(
+        onDismissRequest = onCancel,
+        title = { Text("Authenticate backup") },
+        text = {
+            Column {
+                Text("Enter the master password that encrypts this snapshot. Ironkeep validates it before showing restore details.")
+                OutlinedTextField(
+                    value = password,
+                    onValueChange = { password = it },
+                    label = { Text("Master password") },
+                    visualTransformation = PasswordVisualTransformation(),
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth().padding(top = 12.dp),
+                )
+            }
+        },
+        confirmButton = { Button(onClick = { onSubmit(password.toCharArray()); password = "" }, enabled = password.isNotEmpty(), shape = RectangleShape) { Text("Validate") } },
+        dismissButton = { TextButton(onClick = onCancel) { Text("Cancel") } },
+    )
+}
+
+@Composable
+private fun RestorePreviewDialog(details: dev.ironkeep.app.vault.backup.RestorePreview, onCancel: () -> Unit, onConfirm: () -> Unit) {
+    AlertDialog(
+        onDismissRequest = onCancel,
+        title = { Text("Restore encrypted backup?") },
+        text = {
+            Column {
+                Text("Revision ${details.revision}")
+                Text("Date ${details.updatedAt}")
+                Text("Items ${details.itemCount}")
+                Text("SHA-256 ${details.checksum}", style = MaterialTheme.typography.bodySmall)
+                Text("The current encrypted vault will be preserved as a local recovery snapshot first.", modifier = Modifier.padding(top = 12.dp))
+            }
+        },
+        confirmButton = { Button(onClick = onConfirm, shape = RectangleShape) { Text("Restore") } },
+        dismissButton = { TextButton(onClick = onCancel) { Text("Cancel") } },
+    )
 }
 
 @Composable

@@ -11,10 +11,12 @@ interface VaultStore {
     fun exists(): Boolean
     fun read(): VaultFile
     fun write(vault: VaultFile)
+    fun writeRecovery(vault: VaultFile)
 }
 
 class VaultFileStore(context: Context, private val json: Json) : VaultStore {
     private val file = AtomicFile(File(context.filesDir, "vault.ikv"))
+    private val recoveryFile = AtomicFile(File(context.filesDir, "vault-recovery.ikv"))
 
     override fun exists(): Boolean = file.baseFile.isFile
 
@@ -30,14 +32,22 @@ class VaultFileStore(context: Context, private val json: Json) : VaultStore {
     }
 
     override fun write(vault: VaultFile) {
+        writeAtomic(file, vault)
+    }
+
+    override fun writeRecovery(vault: VaultFile) {
+        writeAtomic(recoveryFile, vault)
+    }
+
+    private fun writeAtomic(target: AtomicFile, vault: VaultFile) {
         val bytes = json.encodeToString(VaultFile.serializer(), vault).encodeToByteArray()
-        val stream = file.startWrite()
+        val stream = target.startWrite()
         try {
             stream.write(bytes)
             stream.fd.sync()
-            file.finishWrite(stream)
+            target.finishWrite(stream)
         } catch (error: Throwable) {
-            file.failWrite(stream)
+            target.failWrite(stream)
             throw error
         } finally {
             bytes.fill(0)

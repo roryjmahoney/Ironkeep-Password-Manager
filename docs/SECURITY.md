@@ -200,6 +200,16 @@ Importers are hostile-input parsers. Stream input, impose byte/item/field limits
 neutralize spreadsheet formula prefixes on CSV export, reject invalid encodings,
 and stage a preview before committing one atomic vault mutation.
 
+Android encrypted backups use the system document picker and copy only the
+existing encrypted v1 envelope. Restore bounds input to 64 MiB, strictly decodes
+UTF-8, authenticates the key wrap and payload with the supplied master password,
+then displays revision, date, item count, and an encrypted-file SHA-256 checksum.
+The confirmed replacement is serialized with normal vault mutations. It first
+atomically writes the prior envelope to private `vault-recovery.ikv`, then uses
+the active `AtomicFile`; failure preserves the prior active vault. Restore clears
+the Android-only biometric wrap because its binding no longer describes the
+active envelope.
+
 ## Release and supply chain
 
 - Pin dependency and action versions; review lockfile changes.

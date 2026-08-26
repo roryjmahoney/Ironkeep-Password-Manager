@@ -6,6 +6,27 @@ stable release.
 
 ## Current implementation
 
+### Completed in 0.8.0
+
+- Android settings can create an encrypted `.ikv` snapshot through Android's
+  system document picker. The exported bytes are the authenticated encrypted
+  vault envelope; Ironkeep never creates a plaintext intermediary or app copy.
+- Restore reads at most 64 MiB, rejects malformed and unsupported envelopes,
+  and requires the snapshot's master password before any restore metadata is
+  displayed.
+- The authenticated preview shows revision, date, item count, and the SHA-256
+  checksum of the selected encrypted file. Cancellation or vault lock wipes the
+  pending input and authenticated candidate from process memory.
+- Confirmed restore serializes against vault mutations, atomically preserves the
+  current encrypted vault as `vault-recovery.ikv`, then atomically replaces the
+  active vault. A failed replacement leaves the active vault intact.
+- Restoring clears device-local biometric enrollment because it is bound to the
+  replaced vault key wrap. No backup contents, passwords, or keys are logged.
+- Kotlin tests cover success, cancellation, corruption, wrong password,
+  incompatible format, oversize rejection, and failed atomic replacement.
+- Android version metadata is `0.8.0` / version code 9; Chromium and Firefox
+  manifests report `0.8.0` with no browser runtime change.
+
 ### Completed in 0.7.0
 
 - Android Autofill now offers **Use strong password** only when a visible,
@@ -192,8 +213,8 @@ stable release.
   and lifecycle coverage remains a release gate.
 - CRUD is implemented only for login items. Secure notes, cards, identities,
   categories, and tags do not yet have complete CRUD UI.
-- CSV import/export, onboarding, conflict UI, master-password change, and vault
-  deletion are not implemented.
+- Browser encrypted backups, CSV import/export, onboarding, conflict UI,
+  master-password change, and vault deletion are not implemented.
 
 This remains a pre-audit build. Placeholder controls and incomplete flows must
 not be represented as production-ready.
@@ -283,11 +304,12 @@ not be represented as production-ready.
 - Export encrypted `.ikv` by default; optional CSV after reauthentication and an
   explicit plaintext warning.
 - Let users create encrypted `.ikv` backup snapshots through the system file
-  picker.
+  picker. Completed on Android in `0.8.0`; browser support remains open.
 - Before restore, require reauthentication and show the snapshot revision, date,
   item count, and checksum after authentication and integrity validation.
 - Restore atomically and preserve the current encrypted vault as a recovery
-  snapshot before replacement.
+  snapshot before replacement. Completed on Android in `0.8.0`; browser support
+  remains open.
 
 ### Drive sync
 

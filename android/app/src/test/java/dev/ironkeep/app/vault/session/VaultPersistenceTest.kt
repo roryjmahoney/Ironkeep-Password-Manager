@@ -51,6 +51,7 @@ class VaultPersistenceTest {
             if (failWrites) error("disk full")
             file = vault
         }
+        override fun writeRecovery(vault: VaultFile) = Unit
     }
 
     companion object {

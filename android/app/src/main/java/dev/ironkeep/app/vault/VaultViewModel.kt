@@ -1,10 +1,15 @@
 package dev.ironkeep.app.vault
 
 import android.app.Application
+import android.net.Uri
 import android.os.SystemClock
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import dev.ironkeep.app.autofill.AutofillPendingSaveStore
+import dev.ironkeep.app.vault.backup.AuthenticatedRestore
+import dev.ironkeep.app.vault.backup.MAX_BACKUP_BYTES
+import dev.ironkeep.app.vault.backup.RestorePreview
+import dev.ironkeep.app.vault.backup.VaultBackup
 import dev.ironkeep.app.vault.crypto.BiometricKeyStore
 import dev.ironkeep.app.vault.crypto.BiometricVaultBinding
 import dev.ironkeep.app.vault.crypto.BiometricVaultRecord
@@ -35,6 +40,8 @@ import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import java.io.ByteArrayOutputStream
+import java.io.InputStream
 import javax.crypto.Cipher
 
 sealed interface VaultUiState {
@@ -53,6 +60,13 @@ sealed interface VaultUiState {
 enum class BiometricPurpose { ENROLL, UNLOCK }
 data class BiometricPromptRequest(val purpose: BiometricPurpose, val cipher: Cipher)
 
+sealed interface BackupUiState {
+    data object Idle : BackupUiState
+    data object Reading : BackupUiState
+    data object PasswordRequired : BackupUiState
+    data class Preview(val details: RestorePreview) : BackupUiState
+}
+
 private sealed interface PendingBiometric {
     val cipher: Cipher
 
@@ -66,12 +80,15 @@ class VaultViewModel(application: Application) : AndroidViewModel(application) {
     private val biometricKeyStore = BiometricKeyStore()
     private val biometricStore = BiometricVaultStore(application, crypto.json)
     private val persistence = VaultPersistence(crypto, store)
+    private val backup = VaultBackup(crypto, store)
     private val mutationCoordinator = VaultMutationCoordinator(persistence)
     private val sessionDeadline = SessionDeadline()
     private val secureClipboard = SecureClipboard(application, viewModelScope)
     private val deviceIdProvider = DeviceIdProvider(application)
     private val mutableState = MutableStateFlow<VaultUiState>(VaultUiState.Loading)
     val state: StateFlow<VaultUiState> = mutableState.asStateFlow()
+    private val mutableBackupState = MutableStateFlow<BackupUiState>(BackupUiState.Idle)
+    val backupState: StateFlow<BackupUiState> = mutableBackupState.asStateFlow()
     private val mutableBiometricRequests = MutableSharedFlow<BiometricPromptRequest>(extraBufferCapacity = 1)
     val biometricRequests: SharedFlow<BiometricPromptRequest> = mutableBiometricRequests.asSharedFlow()
     private val mutableBiometricCancelRequests = MutableSharedFlow<Unit>(extraBufferCapacity = 1)
@@ -79,6 +96,8 @@ class VaultViewModel(application: Application) : AndroidViewModel(application) {
     @Volatile private var pendingBiometric: PendingBiometric? = null
     private var biometricRequestStarting = false
     private var sessionLockJob: Job? = null
+    private var pendingRestoreBytes: ByteArray? = null
+    private var pendingRestore: AuthenticatedRestore? = null
 
     init {
         mutableState.value = if (store.exists()) VaultUiState.Locked(biometricMaterialPresent()) else VaultUiState.Setup
@@ -280,6 +299,100 @@ class VaultViewModel(application: Application) : AndroidViewModel(application) {
         VaultMutations.updateSecuritySettings(payload, autoLockMinutes, clearClipboardSeconds, deviceId())
     }
 
+    fun exportSnapshot(uri: Uri) {
+        val session = VaultSessionHolder.sessionOrNull() ?: return
+        recordUserActivity()
+        viewModelScope.launch {
+            try {
+                val bytes = withContext(Dispatchers.Default) { backup.snapshotBytes(session) }
+                try {
+                    withContext(Dispatchers.IO) {
+                        getApplication<Application>().contentResolver.openOutputStream(uri, "wt")?.use { output ->
+                            output.write(bytes)
+                            output.flush()
+                        } ?: error("Document provider refused output")
+                    }
+                } finally {
+                    bytes.fill(0)
+                }
+                updateUnlockedNotice("Encrypted backup snapshot created.")
+            } catch (_: Exception) {
+                updateUnlockedError("Encrypted backup could not be created. The vault is unchanged.")
+            }
+        }
+    }
+
+    fun loadRestore(uri: Uri) {
+        clearPendingRestore()
+        mutableBackupState.value = BackupUiState.Reading
+        viewModelScope.launch {
+            try {
+                val bytes = withContext(Dispatchers.IO) {
+                    getApplication<Application>().contentResolver.openInputStream(uri)?.use { input ->
+                        input.readBounded(MAX_BACKUP_BYTES)
+                    } ?: error("Document provider refused input")
+                }
+                if (bytes.isEmpty() || bytes.size > MAX_BACKUP_BYTES) {
+                    bytes.fill(0)
+                    error("Backup size rejected")
+                }
+                pendingRestoreBytes = bytes
+                mutableBackupState.value = BackupUiState.PasswordRequired
+            } catch (_: Exception) {
+                clearPendingRestore()
+                updateUnlockedError("Backup file could not be read safely.")
+            }
+        }
+    }
+
+    fun authenticateRestore(masterPassword: CharArray) {
+        val bytes = pendingRestoreBytes ?: run {
+            masterPassword.fill('\u0000')
+            return
+        }
+        viewModelScope.launch {
+            try {
+                val authenticated = withContext(Dispatchers.Default) { backup.authenticate(bytes, masterPassword) }
+                pendingRestoreBytes?.fill(0)
+                pendingRestoreBytes = null
+                pendingRestore = authenticated
+                mutableBackupState.value = BackupUiState.Preview(authenticated.preview)
+            } catch (_: VaultAuthenticationException) {
+                mutableBackupState.value = BackupUiState.PasswordRequired
+                updateUnlockedError("Master password not accepted for this backup.")
+            } catch (_: Exception) {
+                clearPendingRestore()
+                updateUnlockedError("Backup is malformed, corrupt, unsupported, or incompatible.")
+            }
+        }
+    }
+
+    fun confirmRestore() {
+        val candidate = pendingRestore ?: return
+        mutableBackupState.value = BackupUiState.Reading
+        viewModelScope.launch {
+            try {
+                val replacement = mutationCoordinator.withSessionLock {
+                    val current = VaultSessionHolder.sessionOrNull() ?: error("Vault locked")
+                    withContext(Dispatchers.IO) { backup.restore(current, candidate) }
+                }
+                pendingRestore = null
+                withContext(Dispatchers.IO) { clearBiometricMaterial() }
+                VaultSessionHolder.replace(replacement)
+                openSessionDeadline()
+                mutableBackupState.value = BackupUiState.Idle
+                mutableState.value = VaultUiState.Unlocked(replacement.payload, notice = "Backup restored. Previous encrypted vault saved as a recovery snapshot.")
+            } catch (_: Exception) {
+                mutableBackupState.value = BackupUiState.Preview(candidate.preview)
+                updateUnlockedError("Restore failed atomically. The current vault remains intact.")
+            }
+        }
+    }
+
+    fun cancelRestore() {
+        clearPendingRestore()
+    }
+
     fun addLogin(fields: LoginFields) = mutate { payload -> VaultMutations.addLogin(payload, fields, deviceId()) }
 
     fun editLogin(itemId: String, fields: LoginFields) = mutate { payload -> VaultMutations.editLogin(payload, itemId, fields, deviceId()) }
@@ -319,6 +432,7 @@ class VaultViewModel(application: Application) : AndroidViewModel(application) {
         if (pendingBiometric is PendingBiometric.Enrollment) clearBiometricMaterial()
         pendingBiometric = null
         AutofillPendingSaveStore.clear()
+        clearPendingRestore()
         VaultSessionHolder.lock()
         super.onCleared()
     }
@@ -408,6 +522,24 @@ class VaultViewModel(application: Application) : AndroidViewModel(application) {
         runCatching { biometricKeyStore.deleteKey() }
     }
 
+    private fun clearPendingRestore() {
+        pendingRestoreBytes?.fill(0)
+        pendingRestoreBytes = null
+        pendingRestore?.close()
+        pendingRestore = null
+        mutableBackupState.value = BackupUiState.Idle
+    }
+
+    private fun updateUnlockedNotice(message: String) {
+        val current = mutableState.value as? VaultUiState.Unlocked ?: return
+        mutableState.value = current.copy(error = null, notice = message)
+    }
+
+    private fun updateUnlockedError(message: String) {
+        val current = mutableState.value as? VaultUiState.Unlocked ?: return
+        mutableState.value = current.copy(error = message, notice = null)
+    }
+
     private fun openSessionDeadline() {
         sessionDeadline.open(SystemClock.elapsedRealtime())
         scheduleSessionLock()
@@ -440,6 +572,7 @@ class VaultViewModel(application: Application) : AndroidViewModel(application) {
             if (pending is PendingBiometric.Enrollment) withContext(Dispatchers.IO) { clearBiometricMaterial() }
             secureClipboard.clearOwned()
             AutofillPendingSaveStore.clear()
+            clearPendingRestore()
             VaultSessionHolder.lock()
             sessionDeadline.close()
             val message = when (reason) {
@@ -464,4 +597,21 @@ class VaultViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     private fun deviceId(): String = deviceIdProvider.id()
+}
+
+private fun InputStream.readBounded(maxBytes: Int): ByteArray {
+    val output = ByteArrayOutputStream()
+    val buffer = ByteArray(8192)
+    try {
+        var total = 0
+        while (true) {
+            val read = read(buffer)
+            if (read < 0) return output.toByteArray()
+            total += read
+            if (total > maxBytes) throw dev.ironkeep.app.vault.crypto.VaultFormatException("Backup file is oversized")
+            output.write(buffer, 0, read)
+        }
+    } finally {
+        buffer.fill(0)
+    }
 }
