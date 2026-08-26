@@ -9,8 +9,10 @@ server, web application, iOS client, telemetry service, account database, or
 recovery service.
 
 The encrypted vault is authoritative. Google Drive is an optional transport and
-identity boundary, not a cryptographic trust boundary. A local-only vault and a
-Drive-synced vault use the same file format.
+identity boundary, not a cryptographic trust boundary. Google Sign-In provides
+account-like vault discovery across devices, but no Ironkeep account exists and
+Google credentials never unlock the vault. A local-only vault and a Drive-synced
+vault use the same file format.
 
 ## System boundaries
 

@@ -1,10 +1,14 @@
 # Google Drive sync protocol
 
-Drive sync is optional. A user can remain local-only forever. Signing into
-Google grants access to the user's Drive application-data space; it does not
-unlock the vault and does not create an Ironkeep account.
+Drive sync is optional. A user can remain local-only forever. In the product,
+Google Sign-In can provide an account-like way to connect devices and locate
+the user's vault. There is still no separate Ironkeep account: Google identity
+selects the Drive application-data space, while the master password decrypts
+the vault locally.
 
 ## Remote object
+
+The remote object is one compact whole-vault file:
 
 - Scope: `https://www.googleapis.com/auth/drive.appdata`
 - Space/parent: `appDataFolder`
@@ -16,7 +20,8 @@ unlock the vault and does not create an Ironkeep account.
 The app-data folder is hidden from the normal Drive UI and is only accessible to
 the creating application. It is not a backup service: uninstall/revocation,
 account loss, provider deletion, or user action may destroy access. Users still
-need encrypted exports.
+need explicit encrypted `.ikv` snapshots. These are user-selected files outside
+the hidden app-data folder and do not create additional synced vault objects.
 
 See Google's [application-data folder](https://developers.google.com/drive/api/guides/appdata)
 and [file upload](https://developers.google.com/drive/api/guides/manage-uploads)

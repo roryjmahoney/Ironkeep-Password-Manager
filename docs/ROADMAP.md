@@ -282,10 +282,19 @@ not be represented as production-ready.
 - Preview, duplicate policy, limits, per-row errors, and one atomic commit.
 - Export encrypted `.ikv` by default; optional CSV after reauthentication and an
   explicit plaintext warning.
+- Let users create encrypted `.ikv` backup snapshots through the system file
+  picker.
+- Before restore, require reauthentication and show the snapshot revision, date,
+  item count, and checksum after authentication and integrity validation.
+- Restore atomically and preserve the current encrypted vault as a recovery
+  snapshot before replacement.
 
 ### Drive sync
 
 - Optional sign-in/authorization on Android, Chromium, and Firefox.
+- Treat Google Sign-In as account-like vault discovery: the same Google account
+  locates one compact encrypted vault file, while the master password unlocks it
+  locally.
 - One `appDataFolder` file, offline queue, conditional writes, duplicate-file
   stop state, replay warning, remote-deletion recovery, and manual conflict UI.
 - Disconnect without deleting local data; separate explicit remote-delete action.
@@ -316,6 +325,8 @@ not be represented as production-ready.
 - Ironkeep-hosted backend, web vault, account/password database, telemetry, or
   server-assisted recovery.
 - Google password as a vault key.
+- A separate peer-to-peer, QR, or LAN vault-transfer protocol for the MVP; use
+  the single Drive vault or manual encrypted `.ikv` import instead.
 - Silent conflict overwrites.
 - Cloud-only operation.
 - Committing release binaries to the source repository.
