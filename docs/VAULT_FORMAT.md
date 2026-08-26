@@ -124,6 +124,13 @@ The checksum shown to the user is SHA-256 over the exact selected encrypted
 bytes. The prior active envelope is preserved in private app storage before the
 atomic active-file replacement.
 
+Full secure-note, payment-card, and identity CRUD introduced in 0.9.0 adds no
+payload fields and requires no migration. These records use the item variants
+already defined by schema version 1. Mutations follow the same revision,
+timestamp, writer-device, tombstone, fresh-payload-nonce, and atomic persistence
+rules as login CRUD. Search and duplicate detection remain unlocked-memory-only
+operations.
+
 Secrets are ordinary fields only inside the encrypted payload. Token/provider
 credentials and biometric blobs are device-local and must never be added.
 

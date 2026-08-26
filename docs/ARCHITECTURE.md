@@ -196,6 +196,13 @@ envelope contract.
 Browser-captured login creation and update use the same path and likewise require
 no format migration.
 
+Secure-note, payment-card, and identity mutations introduced in 0.9.0 use this
+same serialized payload-only rewrite path on Android and the extensions. They
+preserve the existing v1 key wrap and item creation metadata, increment item and
+vault revisions, add tombstones for deletion, and publish the new unlocked
+snapshot only after encrypted persistence succeeds. Search and duplicate checks
+operate only on the unlocked in-memory payload and create no persistent index.
+
 ### Android biometric unlock
 
 1. The user first unlocks with the master password and explicitly enables

@@ -52,4 +52,93 @@ class VaultMutationsTest {
         assertEquals(15, updated.settings.autoLockMinutes)
         assertEquals(60, updated.settings.clearClipboardSeconds)
     }
+
+    @Test
+    fun secureNoteCrudPreservesMetadataAndCreatesTombstone() {
+        val empty = VaultPayload.empty("Test", "device-a").copy(revision = 1, updatedAt = "2026-01-01T00:00:00Z")
+        val added = VaultMutations.addSecureNote(empty, SecureNoteFields("Recovery", "Offline codes"), "device-a", Instant.parse("2026-01-02T00:00:00Z"), "note-one")
+        assertEquals(SecureNoteItem::class, added.items.single()::class)
+        assertEquals(1, added.items.single().revision)
+
+        val edited = VaultMutations.editSecureNote(added, "note-one", SecureNoteFields("Recovery codes", "Updated codes"), "device-b", Instant.parse("2026-01-03T00:00:00Z"))
+        val note = edited.items.single() as SecureNoteItem
+        assertEquals("Recovery codes", note.title)
+        assertEquals("Updated codes", note.body)
+        assertEquals(2, note.revision)
+        assertEquals("2026-01-02T00:00:00Z", note.createdAt)
+
+        val favorite = VaultMutations.toggleSecureNoteFavorite(edited, "note-one", "device-b", Instant.parse("2026-01-04T00:00:00Z"))
+        assertTrue((favorite.items.single() as SecureNoteItem).favorite)
+
+        val deleted = VaultMutations.deleteSecureNote(favorite, "note-one", "device-b", Instant.parse("2026-01-05T00:00:00Z"))
+        assertTrue(deleted.items.isEmpty())
+        assertEquals(Tombstone("note-one", "2026-01-05T00:00:00Z", 5, "device-b"), deleted.tombstones.single())
+    }
+
+    @Test
+    fun secureNoteValidationAndDuplicateDetectionFailClosed() {
+        val empty = VaultPayload.empty("Test", "device-a")
+        assertTrue(runCatching { VaultMutations.addSecureNote(empty, SecureNoteFields("", "body"), "device-a") }.isFailure)
+        assertTrue(runCatching { VaultMutations.addSecureNote(empty, SecureNoteFields("Title", " "), "device-a") }.isFailure)
+        val added = VaultMutations.addSecureNote(empty, SecureNoteFields("Recovery", "codes"), "device-a", itemId = "note-one")
+        assertEquals(1, VaultMutations.likelySecureNoteDuplicates(added, SecureNoteFields(" recovery ", "different")).size)
+        assertTrue(VaultMutations.likelySecureNoteDuplicates(added, SecureNoteFields("Other", "different")).isEmpty())
+    }
+
+    @Test
+    fun creditCardCrudNormalizesSecretsAndCreatesTombstone() {
+        val card = CreditCardFields("Travel card", "A Person", "4111 1111 1111 1111", 12, 2030, "123", "9876", "Use abroad")
+        val empty = VaultPayload.empty("Test", "device-a").copy(revision = 1, updatedAt = "2026-01-01T00:00:00Z")
+        val added = VaultMutations.addCreditCard(empty, card, "device-a", Instant.parse("2026-01-02T00:00:00Z"), "card-one")
+        assertEquals("4111111111111111", (added.items.single() as CreditCardItem).number)
+        val edited = VaultMutations.editCreditCard(added, "card-one", card.copy(title = "Primary card", notes = "Updated"), "device-b", Instant.parse("2026-01-03T00:00:00Z"))
+        assertEquals(2, (edited.items.single() as CreditCardItem).revision)
+        val favorite = VaultMutations.toggleCreditCardFavorite(edited, "card-one", "device-b", Instant.parse("2026-01-04T00:00:00Z"))
+        assertTrue((favorite.items.single() as CreditCardItem).favorite)
+        val deleted = VaultMutations.deleteCreditCard(favorite, "card-one", "device-b", Instant.parse("2026-01-05T00:00:00Z"))
+        assertTrue(deleted.items.isEmpty())
+        assertEquals(Tombstone("card-one", "2026-01-05T00:00:00Z", 5, "device-b"), deleted.tombstones.single())
+    }
+
+    @Test
+    fun creditCardValidationAndDuplicateDetectionFailClosed() {
+        val card = CreditCardFields("Travel card", "A Person", "4111111111111111", 12, 2030, "123", null, "")
+        val empty = VaultPayload.empty("Test", "device-a")
+        assertTrue(runCatching { VaultMutations.addCreditCard(empty, card.copy(number = "123"), "device-a") }.isFailure)
+        assertTrue(runCatching { VaultMutations.addCreditCard(empty, card.copy(expiryMonth = 13), "device-a") }.isFailure)
+        assertTrue(runCatching { VaultMutations.addCreditCard(empty, card.copy(verificationCode = "x"), "device-a") }.isFailure)
+        val added = VaultMutations.addCreditCard(empty, card, "device-a", itemId = "card-one")
+        assertEquals(1, VaultMutations.likelyCreditCardDuplicates(added, card.copy(number = "4111-1111-1111-1111")).size)
+    }
+
+    @Test
+    fun identityCrudPreservesFieldsAndCreatesTombstone() {
+        val identity = identityFields()
+        val empty = VaultPayload.empty("Test", "device-a").copy(revision = 1, updatedAt = "2026-01-01T00:00:00Z")
+        val added = VaultMutations.addIdentity(empty, identity, "device-a", Instant.parse("2026-01-02T00:00:00Z"), "identity-one")
+        assertEquals("Alex", (added.items.single() as IdentityItem).firstName)
+        val edited = VaultMutations.editIdentity(added, "identity-one", identity.copy(company = "Updated"), "device-b", Instant.parse("2026-01-03T00:00:00Z"))
+        assertEquals(2, (edited.items.single() as IdentityItem).revision)
+        val favorite = VaultMutations.toggleIdentityFavorite(edited, "identity-one", "device-b", Instant.parse("2026-01-04T00:00:00Z"))
+        assertTrue((favorite.items.single() as IdentityItem).favorite)
+        val deleted = VaultMutations.deleteIdentity(favorite, "identity-one", "device-b", Instant.parse("2026-01-05T00:00:00Z"))
+        assertTrue(deleted.items.isEmpty())
+        assertEquals(Tombstone("identity-one", "2026-01-05T00:00:00Z", 5, "device-b"), deleted.tombstones.single())
+    }
+
+    @Test
+    fun identityValidationAndDuplicateDetectionFailClosed() {
+        val identity = identityFields()
+        val empty = VaultPayload.empty("Test", "device-a")
+        assertTrue(runCatching { VaultMutations.addIdentity(empty, identity.copy(firstName = "", middleName = "", lastName = "", email = "", phone = "", company = "", addressLine1 = "", addressLine2 = "", city = "", region = "", postalCode = "", country = ""), "device-a") }.isFailure)
+        assertTrue(runCatching { VaultMutations.addIdentity(empty, identity.copy(email = "invalid"), "device-a") }.isFailure)
+        val added = VaultMutations.addIdentity(empty, identity, "device-a", itemId = "identity-one")
+        assertEquals(1, VaultMutations.likelyIdentityDuplicates(added, identity.copy(title = "Other", email = " ALEX@example.com ")).size)
+    }
+
+    private fun identityFields() = IdentityFields(
+        title = "Personal identity", firstName = "Alex", middleName = "Q", lastName = "Person",
+        email = "alex@example.com", phone = "+1 555 0100", company = "Example", addressLine1 = "1 Main Street",
+        addressLine2 = "Unit 2", city = "Seattle", region = "WA", postalCode = "98101", country = "US", notes = "Primary",
+    )
 }

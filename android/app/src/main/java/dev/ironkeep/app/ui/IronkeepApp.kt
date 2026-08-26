@@ -42,6 +42,9 @@ import androidx.compose.material.icons.outlined.Save
 import androidx.compose.material.icons.outlined.Settings
 import androidx.compose.material.icons.outlined.Delete
 import androidx.compose.material.icons.outlined.ContentCopy
+import androidx.compose.material.icons.outlined.CreditCard
+import androidx.compose.material.icons.outlined.Description
+import androidx.compose.material.icons.outlined.Person
 import androidx.compose.material.icons.outlined.Timer
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
@@ -73,6 +76,7 @@ import androidx.compose.ui.semantics.heading
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -86,6 +90,13 @@ import dev.ironkeep.app.vault.VaultUiState
 import dev.ironkeep.app.vault.VaultViewModel
 import dev.ironkeep.app.vault.model.LoginFields
 import dev.ironkeep.app.vault.model.LoginItem
+import dev.ironkeep.app.vault.model.CreditCardFields
+import dev.ironkeep.app.vault.model.CreditCardItem
+import dev.ironkeep.app.vault.model.IdentityFields
+import dev.ironkeep.app.vault.model.IdentityItem
+import dev.ironkeep.app.vault.model.SecureNoteFields
+import dev.ironkeep.app.vault.model.SecureNoteItem
+import dev.ironkeep.app.vault.model.VaultItem
 import dev.ironkeep.app.vault.model.VaultPayload
 import dev.ironkeep.app.vault.model.VaultMutations
 
@@ -170,6 +181,18 @@ fun IronkeepApp(viewModel: VaultViewModel) {
                 onEdit = viewModel::editLogin,
                 onDelete = viewModel::deleteLogin,
                 onToggleFavorite = viewModel::toggleLoginFavorite,
+                onAddSecureNote = viewModel::addSecureNote,
+                onEditSecureNote = viewModel::editSecureNote,
+                onDeleteSecureNote = viewModel::deleteSecureNote,
+                onToggleSecureNoteFavorite = viewModel::toggleSecureNoteFavorite,
+                onAddCreditCard = viewModel::addCreditCard,
+                onEditCreditCard = viewModel::editCreditCard,
+                onDeleteCreditCard = viewModel::deleteCreditCard,
+                onToggleCreditCardFavorite = viewModel::toggleCreditCardFavorite,
+                onAddIdentity = viewModel::addIdentity,
+                onEditIdentity = viewModel::editIdentity,
+                onDeleteIdentity = viewModel::deleteIdentity,
+                onToggleIdentityFavorite = viewModel::toggleIdentityFavorite,
                 onEnableBiometric = viewModel::requestBiometricEnrollment,
                 onDisableBiometric = viewModel::disableBiometricUnlock,
                 onUpdateSecuritySettings = viewModel::updateSecuritySettings,
@@ -309,6 +332,18 @@ private fun VaultHome(
     onEdit: (String, LoginFields) -> Unit,
     onDelete: (String) -> Unit,
     onToggleFavorite: (String) -> Unit,
+    onAddSecureNote: (SecureNoteFields) -> Unit,
+    onEditSecureNote: (String, SecureNoteFields) -> Unit,
+    onDeleteSecureNote: (String) -> Unit,
+    onToggleSecureNoteFavorite: (String) -> Unit,
+    onAddCreditCard: (CreditCardFields) -> Unit,
+    onEditCreditCard: (String, CreditCardFields) -> Unit,
+    onDeleteCreditCard: (String) -> Unit,
+    onToggleCreditCardFavorite: (String) -> Unit,
+    onAddIdentity: (IdentityFields) -> Unit,
+    onEditIdentity: (String, IdentityFields) -> Unit,
+    onDeleteIdentity: (String) -> Unit,
+    onToggleIdentityFavorite: (String) -> Unit,
     onEnableBiometric: () -> Unit,
     onDisableBiometric: () -> Unit,
     onUpdateSecuritySettings: (Int, Int) -> Unit,
@@ -324,15 +359,34 @@ private fun VaultHome(
     var query by remember { mutableStateOf("") }
     var editingId by remember { mutableStateOf<String?>(null) }
     var creating by remember { mutableStateOf(false) }
-    var deleteTarget by remember { mutableStateOf<LoginItem?>(null) }
+    var editingNoteId by remember { mutableStateOf<String?>(null) }
+    var creatingNote by remember { mutableStateOf(false) }
+    var editingCardId by remember { mutableStateOf<String?>(null) }
+    var creatingCard by remember { mutableStateOf(false) }
+    var editingIdentityId by remember { mutableStateOf<String?>(null) }
+    var creatingIdentity by remember { mutableStateOf(false) }
+    var deleteTarget by remember { mutableStateOf<VaultItem?>(null) }
     var confirmDisableBiometric by remember { mutableStateOf(false) }
     var showSecuritySettings by remember { mutableStateOf(false) }
     var destination by remember { mutableStateOf(VaultDestination.VAULT) }
     val logins = vault.items.filterIsInstance<LoginItem>().filter {
         query.isBlank() || it.title.contains(query, true) || it.username.contains(query, true)
     }
+    val notes = vault.items.filterIsInstance<SecureNoteItem>().filter {
+        query.isBlank() || it.title.contains(query, true) || it.body.contains(query, true)
+    }
+    val cards = vault.items.filterIsInstance<CreditCardItem>().filter {
+        query.isBlank() || it.title.contains(query, true) || it.cardholderName.contains(query, true) || it.number.contains(query)
+    }
+    val identities = vault.items.filterIsInstance<IdentityItem>().filter {
+        query.isBlank() || listOf(it.title, it.firstName, it.middleName, it.lastName, it.email, it.phone, it.company, it.city, it.country).any { value -> value.contains(query, true) }
+    }
+    val visibleItems: List<VaultItem> = (logins + notes + cards + identities).sortedWith(compareByDescending<VaultItem> { it.favorite }.thenBy { it.title.lowercase() })
 
     val editing = vault.items.filterIsInstance<LoginItem>().find { it.id == editingId }
+    val editingNote = vault.items.filterIsInstance<SecureNoteItem>().find { it.id == editingNoteId }
+    val editingCard = vault.items.filterIsInstance<CreditCardItem>().find { it.id == editingCardId }
+    val editingIdentity = vault.items.filterIsInstance<IdentityItem>().find { it.id == editingIdentityId }
     if (creating || editing != null) {
         LoginForm(
             vault = vault,
@@ -345,6 +399,42 @@ private fun VaultHome(
             },
             onDelete = editing?.let { item -> { deleteTarget = item } },
             onCopyPassword = onCopyPassword,
+        )
+    } else if (creatingNote || editingNote != null) {
+        SecureNoteForm(
+            vault = vault,
+            item = editingNote,
+            onCancel = { creatingNote = false; editingNoteId = null },
+            onSave = { fields ->
+                if (editingNote == null) onAddSecureNote(fields) else onEditSecureNote(editingNote.id, fields)
+                creatingNote = false
+                editingNoteId = null
+            },
+            onDelete = editingNote?.let { item -> { deleteTarget = item } },
+        )
+    } else if (creatingCard || editingCard != null) {
+        CreditCardForm(
+            vault = vault,
+            item = editingCard,
+            onCancel = { creatingCard = false; editingCardId = null },
+            onSave = { fields ->
+                if (editingCard == null) onAddCreditCard(fields) else onEditCreditCard(editingCard.id, fields)
+                creatingCard = false
+                editingCardId = null
+            },
+            onDelete = editingCard?.let { item -> { deleteTarget = item } },
+        )
+    } else if (creatingIdentity || editingIdentity != null) {
+        IdentityForm(
+            vault = vault,
+            item = editingIdentity,
+            onCancel = { creatingIdentity = false; editingIdentityId = null },
+            onSave = { fields ->
+                if (editingIdentity == null) onAddIdentity(fields) else onEditIdentity(editingIdentity.id, fields)
+                creatingIdentity = false
+                editingIdentityId = null
+            },
+            onDelete = editingIdentity?.let { item -> { deleteTarget = item } },
         )
     } else {
     Scaffold(
@@ -386,7 +476,7 @@ private fun VaultHome(
                         singleLine = true,
                         shape = RectangleShape,
                     )
-                    if (vault.items.filterIsInstance<LoginItem>().isEmpty()) {
+                    if (vault.items.none { it is LoginItem || it is SecureNoteItem || it is CreditCardItem || it is IdentityItem }) {
                         Column(
                             Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 40.dp),
                             horizontalAlignment = Alignment.CenterHorizontally,
@@ -394,39 +484,108 @@ private fun VaultHome(
                             HorizontalDivider(color = MaterialTheme.colorScheme.outline)
                             Icon(Icons.Outlined.Key, contentDescription = null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.padding(top = 40.dp).size(34.dp))
                             Text("Nothing in this drawer.", style = MaterialTheme.typography.headlineLarge, modifier = Modifier.padding(top = 16.dp).semantics { heading() })
-                            Text("Add the first login to this encrypted vault.", color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(top = 8.dp))
-                            OutlinedButton(onClick = { creating = true }, shape = RectangleShape, modifier = Modifier.padding(vertical = 24.dp).height(48.dp)) {
-                                Icon(Icons.Outlined.Add, contentDescription = null)
-                                Spacer(Modifier.size(8.dp))
-                                Text("Add first login")
+                            Text("Add the first login, secure note, payment card, or identity to this encrypted vault.", color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(top = 8.dp))
+                            Column(Modifier.fillMaxWidth().padding(vertical = 24.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                OutlinedButton(onClick = { creating = true }, shape = RectangleShape, modifier = Modifier.weight(1f).height(48.dp)) {
+                                    Icon(Icons.Outlined.Add, contentDescription = null)
+                                    Spacer(Modifier.size(8.dp))
+                                    Text("Login")
+                                }
+                                OutlinedButton(onClick = { creatingNote = true }, shape = RectangleShape, modifier = Modifier.weight(1f).height(48.dp)) {
+                                    Icon(Icons.Outlined.Description, contentDescription = null)
+                                    Spacer(Modifier.size(8.dp))
+                                    Text("Note")
+                                }
+                                }
+                                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                OutlinedButton(onClick = { creatingCard = true }, shape = RectangleShape, modifier = Modifier.weight(1f).height(48.dp)) {
+                                    Icon(Icons.Outlined.CreditCard, contentDescription = null)
+                                    Spacer(Modifier.size(8.dp))
+                                    Text("Card")
+                                }
+                                OutlinedButton(onClick = { creatingIdentity = true }, shape = RectangleShape, modifier = Modifier.weight(1f).height(48.dp)) {
+                                    Icon(Icons.Outlined.Person, contentDescription = null)
+                                    Spacer(Modifier.size(8.dp))
+                                    Text("Identity")
+                                }
+                                }
                             }
                             HorizontalDivider(color = MaterialTheme.colorScheme.outline)
                         }
                     } else {
-                        Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp), verticalAlignment = Alignment.CenterVertically) {
-                            Text("LOGINS", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.primary)
-                            Spacer(Modifier.weight(1f))
-                            Button(onClick = { creating = true }, shape = RectangleShape, modifier = Modifier.height(48.dp)) {
+                        Column(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                            Text("VAULT ITEMS", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.primary)
+                            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            Button(onClick = { creating = true }, shape = RectangleShape, modifier = Modifier.weight(1f).height(48.dp)) {
                                 Icon(Icons.Outlined.Add, contentDescription = null)
-                                Spacer(Modifier.size(8.dp))
-                                Text("Add login")
+                                Spacer(Modifier.size(6.dp))
+                                Text("Login")
+                            }
+                            OutlinedButton(onClick = { creatingNote = true }, shape = RectangleShape, modifier = Modifier.weight(1f).height(48.dp)) {
+                                Icon(Icons.Outlined.Description, contentDescription = null)
+                                Spacer(Modifier.size(6.dp))
+                                Text("Note")
+                            }
+                            OutlinedButton(onClick = { creatingCard = true }, shape = RectangleShape, modifier = Modifier.weight(1f).height(48.dp)) {
+                                Icon(Icons.Outlined.CreditCard, contentDescription = null)
+                                Spacer(Modifier.size(6.dp))
+                                Text("Card")
+                            }
+                            OutlinedButton(onClick = { creatingIdentity = true }, shape = RectangleShape, modifier = Modifier.weight(1f).height(48.dp)) {
+                                Icon(Icons.Outlined.Person, contentDescription = null)
+                                Spacer(Modifier.size(6.dp))
+                                Text("ID")
+                            }
                             }
                         }
                         LazyColumn(Modifier.weight(1f)) {
-                            items(logins, key = { it.id }) { login ->
+                            items(visibleItems, key = { it.id }) { item ->
                                 Row(
-                                    Modifier.fillMaxWidth().clickable { editingId = login.id }.padding(horizontal = 20.dp, vertical = 12.dp),
+                                    Modifier.fillMaxWidth().clickable {
+                                        when (item) {
+                                            is LoginItem -> editingId = item.id
+                                            is SecureNoteItem -> editingNoteId = item.id
+                                            is CreditCardItem -> editingCardId = item.id
+                                            is IdentityItem -> editingIdentityId = item.id
+                                        }
+                                    }.padding(horizontal = 20.dp, vertical = 12.dp),
                                     verticalAlignment = Alignment.CenterVertically,
                                 ) {
                                     Box(Modifier.size(48.dp).border(1.dp, MaterialTheme.colorScheme.outline), contentAlignment = Alignment.Center) {
-                                        Icon(Icons.Outlined.Key, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
+                                        Icon(
+                                            when (item) {
+                                                is LoginItem -> Icons.Outlined.Key
+                                                is CreditCardItem -> Icons.Outlined.CreditCard
+                                                is IdentityItem -> Icons.Outlined.Person
+                                                else -> Icons.Outlined.Description
+                                            },
+                                            contentDescription = null,
+                                            tint = MaterialTheme.colorScheme.primary,
+                                        )
                                     }
                                     Column(Modifier.weight(1f).padding(horizontal = 12.dp)) {
-                                        Text(login.title, style = MaterialTheme.typography.titleMedium)
-                                        Text(login.username.ifBlank { login.uris.firstOrNull() ?: "Login" }, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                        Text(item.title, style = MaterialTheme.typography.titleMedium)
+                                        Text(
+                                            when (item) {
+                                                is LoginItem -> item.username.ifBlank { item.uris.firstOrNull() ?: "Login" }
+                                                is SecureNoteItem -> "Secure note"
+                                                is CreditCardItem -> "•••• ${item.number.takeLast(4)} · ${item.expiryMonth.toString().padStart(2, '0')}/${item.expiryYear}"
+                                                is IdentityItem -> item.email.ifBlank { listOf(item.firstName, item.lastName).filter(String::isNotBlank).joinToString(" ").ifBlank { "Identity" } }
+                                            },
+                                            style = MaterialTheme.typography.bodySmall,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                        )
                                     }
-                                    IconButton(onClick = { onToggleFavorite(login.id) }, modifier = Modifier.size(48.dp)) {
-                                        Icon(if (login.favorite) Icons.Outlined.Favorite else Icons.Outlined.FavoriteBorder, contentDescription = if (login.favorite) "Remove ${login.title} from favorites" else "Add ${login.title} to favorites")
+                                    IconButton(onClick = {
+                                        when (item) {
+                                            is LoginItem -> onToggleFavorite(item.id)
+                                            is SecureNoteItem -> onToggleSecureNoteFavorite(item.id)
+                                            is CreditCardItem -> onToggleCreditCardFavorite(item.id)
+                                            is IdentityItem -> onToggleIdentityFavorite(item.id)
+                                        }
+                                    }, modifier = Modifier.size(48.dp)) {
+                                        Icon(if (item.favorite) Icons.Outlined.Favorite else Icons.Outlined.FavoriteBorder, contentDescription = if (item.favorite) "Remove ${item.title} from favorites" else "Add ${item.title} to favorites")
                                     }
                                 }
                                 HorizontalDivider(color = MaterialTheme.colorScheme.outline)
@@ -518,16 +677,32 @@ private fun VaultHome(
         AlertDialog(
             onDismissRequest = { deleteTarget = null },
             title = { Text("Delete ${item.title}?") },
-            text = { Text("The login will be removed and a deletion tombstone will be encrypted into the vault.") },
+            text = { Text("The ${when (item) { is SecureNoteItem -> "secure note"; is CreditCardItem -> "credit card"; is IdentityItem -> "identity"; else -> "login" }} will be removed and a deletion tombstone will be encrypted into the vault.") },
             confirmButton = {
                 Button(
-                    onClick = { onDelete(item.id); deleteTarget = null; creating = false; editingId = null },
+                    onClick = {
+                        when (item) {
+                            is SecureNoteItem -> onDeleteSecureNote(item.id)
+                            is CreditCardItem -> onDeleteCreditCard(item.id)
+                            is IdentityItem -> onDeleteIdentity(item.id)
+                            else -> onDelete(item.id)
+                        }
+                        deleteTarget = null
+                        creating = false
+                        creatingNote = false
+                        creatingCard = false
+                        creatingIdentity = false
+                        editingId = null
+                        editingNoteId = null
+                        editingCardId = null
+                        editingIdentityId = null
+                    },
                     shape = RectangleShape,
                     colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error, contentColor = MaterialTheme.colorScheme.onError),
                 ) {
                     Icon(Icons.Outlined.Delete, contentDescription = null)
                     Spacer(Modifier.size(8.dp))
-                    Text("Delete login")
+                    Text(when (item) { is SecureNoteItem -> "Delete note"; is CreditCardItem -> "Delete card"; is IdentityItem -> "Delete identity"; else -> "Delete login" })
                 }
             },
             dismissButton = { TextButton(onClick = { deleteTarget = null }) { Text("Cancel") } },
@@ -674,6 +849,257 @@ private tailrec fun Context.findFragmentActivity(): FragmentActivity = when (thi
     is FragmentActivity -> this
     is ContextWrapper -> baseContext.findFragmentActivity()
     else -> error("Ironkeep requires a FragmentActivity context")
+}
+
+@Composable
+private fun IdentityForm(
+    vault: VaultPayload,
+    item: IdentityItem?,
+    onCancel: () -> Unit,
+    onSave: (IdentityFields) -> Unit,
+    onDelete: (() -> Unit)?,
+) {
+    var title by remember(item?.id) { mutableStateOf(item?.title.orEmpty()) }
+    var firstName by remember(item?.id) { mutableStateOf(item?.firstName.orEmpty()) }
+    var middleName by remember(item?.id) { mutableStateOf(item?.middleName.orEmpty()) }
+    var lastName by remember(item?.id) { mutableStateOf(item?.lastName.orEmpty()) }
+    var email by remember(item?.id) { mutableStateOf(item?.email.orEmpty()) }
+    var phone by remember(item?.id) { mutableStateOf(item?.phone.orEmpty()) }
+    var company by remember(item?.id) { mutableStateOf(item?.company.orEmpty()) }
+    var addressLine1 by remember(item?.id) { mutableStateOf(item?.addressLine1.orEmpty()) }
+    var addressLine2 by remember(item?.id) { mutableStateOf(item?.addressLine2.orEmpty()) }
+    var city by remember(item?.id) { mutableStateOf(item?.city.orEmpty()) }
+    var region by remember(item?.id) { mutableStateOf(item?.region.orEmpty()) }
+    var postalCode by remember(item?.id) { mutableStateOf(item?.postalCode.orEmpty()) }
+    var country by remember(item?.id) { mutableStateOf(item?.country.orEmpty()) }
+    var notes by remember(item?.id) { mutableStateOf(item?.notes.orEmpty()) }
+    var localError by remember { mutableStateOf<String?>(null) }
+    var duplicateFields by remember { mutableStateOf<IdentityFields?>(null) }
+
+    fun fields() = IdentityFields(title, firstName, middleName, lastName, email, phone, company, addressLine1, addressLine2, city, region, postalCode, country, notes)
+    fun submit() {
+        val values = fields()
+        val hasDetails = listOf(values.firstName, values.middleName, values.lastName, values.email, values.phone, values.company, values.addressLine1, values.addressLine2, values.city, values.region, values.postalCode, values.country).any(String::isNotBlank)
+        if (values.title.isBlank() || !hasDetails || (values.email.isNotBlank() && '@' !in values.email)) {
+            localError = "Enter a title and at least one valid identity field."
+            return
+        }
+        val duplicates = VaultMutations.likelyIdentityDuplicates(vault, values, item?.id)
+        if (duplicates.isNotEmpty()) duplicateFields = values else onSave(values)
+    }
+
+    Scaffold(containerColor = MaterialTheme.colorScheme.background) { insets ->
+        Column(Modifier.fillMaxSize().padding(insets).verticalScroll(rememberScrollState()).padding(20.dp)) {
+            Text("IDENTITY RECORD", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.primary)
+            Text(if (item == null) "Add identity" else "Edit identity", style = MaterialTheme.typography.displaySmall, modifier = Modifier.padding(top = 8.dp).semantics { heading() })
+            Spacer(Modifier.height(24.dp))
+            OutlinedTextField(title, { title = it; localError = null }, Modifier.fillMaxWidth(), label = { Text("Title") }, singleLine = true, shape = RectangleShape)
+            Spacer(Modifier.height(12.dp))
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                OutlinedTextField(firstName, { firstName = it; localError = null }, Modifier.weight(1f), label = { Text("First name") }, singleLine = true, shape = RectangleShape)
+                OutlinedTextField(lastName, { lastName = it; localError = null }, Modifier.weight(1f), label = { Text("Last name") }, singleLine = true, shape = RectangleShape)
+            }
+            Spacer(Modifier.height(12.dp))
+            OutlinedTextField(middleName, { middleName = it; localError = null }, Modifier.fillMaxWidth(), label = { Text("Middle name") }, singleLine = true, shape = RectangleShape)
+            Spacer(Modifier.height(12.dp))
+            OutlinedTextField(email, { email = it; localError = null }, Modifier.fillMaxWidth(), label = { Text("Email") }, singleLine = true, keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Email), shape = RectangleShape)
+            Spacer(Modifier.height(12.dp))
+            OutlinedTextField(phone, { phone = it; localError = null }, Modifier.fillMaxWidth(), label = { Text("Phone") }, singleLine = true, keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Phone), shape = RectangleShape)
+            Spacer(Modifier.height(12.dp))
+            OutlinedTextField(company, { company = it; localError = null }, Modifier.fillMaxWidth(), label = { Text("Company") }, singleLine = true, shape = RectangleShape)
+            Spacer(Modifier.height(12.dp))
+            OutlinedTextField(addressLine1, { addressLine1 = it; localError = null }, Modifier.fillMaxWidth(), label = { Text("Address line 1") }, singleLine = true, shape = RectangleShape)
+            Spacer(Modifier.height(12.dp))
+            OutlinedTextField(addressLine2, { addressLine2 = it; localError = null }, Modifier.fillMaxWidth(), label = { Text("Address line 2") }, singleLine = true, shape = RectangleShape)
+            Spacer(Modifier.height(12.dp))
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                OutlinedTextField(city, { city = it; localError = null }, Modifier.weight(1f), label = { Text("City") }, singleLine = true, shape = RectangleShape)
+                OutlinedTextField(region, { region = it; localError = null }, Modifier.weight(1f), label = { Text("Region") }, singleLine = true, shape = RectangleShape)
+            }
+            Spacer(Modifier.height(12.dp))
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                OutlinedTextField(postalCode, { postalCode = it; localError = null }, Modifier.weight(1f), label = { Text("Postal code") }, singleLine = true, shape = RectangleShape)
+                OutlinedTextField(country, { country = it; localError = null }, Modifier.weight(1f), label = { Text("Country") }, singleLine = true, shape = RectangleShape)
+            }
+            Spacer(Modifier.height(12.dp))
+            OutlinedTextField(notes, { notes = it }, Modifier.fillMaxWidth(), label = { Text("Notes") }, minLines = 3, shape = RectangleShape)
+            Text(localError.orEmpty(), color = MaterialTheme.colorScheme.error, modifier = Modifier.height(52.dp).padding(top = 8.dp))
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                Button(onClick = ::submit, shape = RectangleShape, modifier = Modifier.height(48.dp)) {
+                    Icon(Icons.Outlined.Save, contentDescription = null)
+                    Spacer(Modifier.size(8.dp))
+                    Text("Save encrypted")
+                }
+                OutlinedButton(onClick = onCancel, shape = RectangleShape, modifier = Modifier.height(48.dp)) { Text("Cancel") }
+            }
+            if (onDelete != null) {
+                TextButton(onClick = onDelete, modifier = Modifier.padding(top = 16.dp).height(48.dp), colors = ButtonDefaults.textButtonColors(contentColor = MaterialTheme.colorScheme.error)) {
+                    Icon(Icons.Outlined.Delete, contentDescription = null)
+                    Spacer(Modifier.size(8.dp))
+                    Text("Delete identity")
+                }
+            }
+        }
+    }
+
+    duplicateFields?.let { values ->
+        AlertDialog(
+            onDismissRequest = { duplicateFields = null },
+            title = { Text("Identity already stored") },
+            text = { Text("An identity with this email or name already exists. Save another identity anyway?") },
+            confirmButton = { Button(onClick = { duplicateFields = null; onSave(values) }, shape = RectangleShape) { Text("Save anyway") } },
+            dismissButton = { TextButton(onClick = { duplicateFields = null }) { Text("Review fields") } },
+        )
+    }
+}
+
+@Composable
+private fun CreditCardForm(
+    vault: VaultPayload,
+    item: CreditCardItem?,
+    onCancel: () -> Unit,
+    onSave: (CreditCardFields) -> Unit,
+    onDelete: (() -> Unit)?,
+) {
+    var title by remember(item?.id) { mutableStateOf(item?.title.orEmpty()) }
+    var cardholder by remember(item?.id) { mutableStateOf(item?.cardholderName.orEmpty()) }
+    var number by remember(item?.id) { mutableStateOf(item?.number.orEmpty()) }
+    var month by remember(item?.id) { mutableStateOf(item?.expiryMonth?.toString() ?: "1") }
+    var year by remember(item?.id) { mutableStateOf(item?.expiryYear?.toString() ?: java.time.Year.now().value.toString()) }
+    var verificationCode by remember(item?.id) { mutableStateOf(item?.verificationCode.orEmpty()) }
+    var pin by remember(item?.id) { mutableStateOf(item?.pin.orEmpty()) }
+    var notes by remember(item?.id) { mutableStateOf(item?.notes.orEmpty()) }
+    var localError by remember { mutableStateOf<String?>(null) }
+    var duplicateFields by remember { mutableStateOf<CreditCardFields?>(null) }
+
+    fun fields() = CreditCardFields(title, cardholder, number, month.toIntOrNull() ?: 0, year.toIntOrNull() ?: 0, verificationCode, pin.ifBlank { null }, notes)
+    fun submit() {
+        val values = fields()
+        val normalizedNumber = values.number.replace(Regex("[\\s-]"), "")
+        if (values.title.isBlank() || values.cardholderName.isBlank() || !normalizedNumber.matches(Regex("\\d{12,19}")) || values.expiryMonth !in 1..12 || values.expiryYear !in 2000..9999 || !values.verificationCode.matches(Regex("\\d{3,4}"))) {
+            localError = "Enter a title, cardholder, valid card number, expiry, and verification code."
+            return
+        }
+        val duplicates = VaultMutations.likelyCreditCardDuplicates(vault, values, item?.id)
+        if (duplicates.isNotEmpty()) duplicateFields = values else onSave(values)
+    }
+
+    val numberKeyboard = KeyboardOptions(keyboardType = KeyboardType.Number)
+    Scaffold(containerColor = MaterialTheme.colorScheme.background) { insets ->
+        Column(Modifier.fillMaxSize().padding(insets).verticalScroll(rememberScrollState()).padding(20.dp)) {
+            Text("PAYMENT CARD", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.primary)
+            Text(if (item == null) "Add card" else "Edit card", style = MaterialTheme.typography.displaySmall, modifier = Modifier.padding(top = 8.dp).semantics { heading() })
+            Spacer(Modifier.height(24.dp))
+            OutlinedTextField(title, { title = it; localError = null }, Modifier.fillMaxWidth(), label = { Text("Title") }, singleLine = true, shape = RectangleShape)
+            Spacer(Modifier.height(12.dp))
+            OutlinedTextField(cardholder, { cardholder = it; localError = null }, Modifier.fillMaxWidth(), label = { Text("Cardholder name") }, singleLine = true, shape = RectangleShape)
+            Spacer(Modifier.height(12.dp))
+            OutlinedTextField(number, { number = it; localError = null }, Modifier.fillMaxWidth(), label = { Text("Card number") }, singleLine = true, visualTransformation = PasswordVisualTransformation(), keyboardOptions = numberKeyboard, shape = RectangleShape)
+            Spacer(Modifier.height(12.dp))
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                OutlinedTextField(month, { month = it; localError = null }, Modifier.weight(1f), label = { Text("Month") }, singleLine = true, keyboardOptions = numberKeyboard, shape = RectangleShape)
+                OutlinedTextField(year, { year = it; localError = null }, Modifier.weight(1f), label = { Text("Year") }, singleLine = true, keyboardOptions = numberKeyboard, shape = RectangleShape)
+            }
+            Spacer(Modifier.height(12.dp))
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                OutlinedTextField(verificationCode, { verificationCode = it; localError = null }, Modifier.weight(1f), label = { Text("CVV/CVC") }, singleLine = true, visualTransformation = PasswordVisualTransformation(), keyboardOptions = numberKeyboard, shape = RectangleShape)
+                OutlinedTextField(pin, { pin = it; localError = null }, Modifier.weight(1f), label = { Text("PIN · optional") }, singleLine = true, visualTransformation = PasswordVisualTransformation(), keyboardOptions = numberKeyboard, shape = RectangleShape)
+            }
+            Spacer(Modifier.height(12.dp))
+            OutlinedTextField(notes, { notes = it }, Modifier.fillMaxWidth(), label = { Text("Notes") }, minLines = 3, shape = RectangleShape)
+            Text(localError.orEmpty(), color = MaterialTheme.colorScheme.error, modifier = Modifier.height(52.dp).padding(top = 8.dp))
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                Button(onClick = ::submit, shape = RectangleShape, modifier = Modifier.height(48.dp)) {
+                    Icon(Icons.Outlined.Save, contentDescription = null)
+                    Spacer(Modifier.size(8.dp))
+                    Text("Save encrypted")
+                }
+                OutlinedButton(onClick = onCancel, shape = RectangleShape, modifier = Modifier.height(48.dp)) { Text("Cancel") }
+            }
+            if (onDelete != null) {
+                TextButton(onClick = onDelete, modifier = Modifier.padding(top = 16.dp).height(48.dp), colors = ButtonDefaults.textButtonColors(contentColor = MaterialTheme.colorScheme.error)) {
+                    Icon(Icons.Outlined.Delete, contentDescription = null)
+                    Spacer(Modifier.size(8.dp))
+                    Text("Delete card")
+                }
+            }
+        }
+    }
+
+    duplicateFields?.let { values ->
+        AlertDialog(
+            onDismissRequest = { duplicateFields = null },
+            title = { Text("Card already stored") },
+            text = { Text("A payment card with this number already exists. Save another card anyway?") },
+            confirmButton = { Button(onClick = { duplicateFields = null; onSave(values) }, shape = RectangleShape) { Text("Save anyway") } },
+            dismissButton = { TextButton(onClick = { duplicateFields = null }) { Text("Review fields") } },
+        )
+    }
+}
+
+@Composable
+private fun SecureNoteForm(
+    vault: VaultPayload,
+    item: SecureNoteItem?,
+    onCancel: () -> Unit,
+    onSave: (SecureNoteFields) -> Unit,
+    onDelete: (() -> Unit)?,
+) {
+    var title by remember(item?.id) { mutableStateOf(item?.title.orEmpty()) }
+    var body by remember(item?.id) { mutableStateOf(item?.body.orEmpty()) }
+    var localError by remember { mutableStateOf<String?>(null) }
+    var duplicateFields by remember { mutableStateOf<SecureNoteFields?>(null) }
+
+    fun submit() {
+        val values = SecureNoteFields(title, body)
+        if (values.title.isBlank() || values.body.isBlank()) {
+            localError = "Title and note body are required."
+            return
+        }
+        val duplicates = VaultMutations.likelySecureNoteDuplicates(vault, values, item?.id)
+        if (duplicates.isNotEmpty()) duplicateFields = values else onSave(values)
+    }
+
+    Scaffold(containerColor = MaterialTheme.colorScheme.background) { insets ->
+        Column(Modifier.fillMaxSize().padding(insets).verticalScroll(rememberScrollState()).padding(20.dp)) {
+            Text("SECURE NOTE", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.primary)
+            Text(if (item == null) "Add note" else "Edit note", style = MaterialTheme.typography.displaySmall, modifier = Modifier.padding(top = 8.dp).semantics { heading() })
+            Spacer(Modifier.height(24.dp))
+            OutlinedTextField(title, { title = it; localError = null }, Modifier.fillMaxWidth(), label = { Text("Title") }, singleLine = true, shape = RectangleShape)
+            Spacer(Modifier.height(12.dp))
+            OutlinedTextField(body, { body = it; localError = null }, Modifier.fillMaxWidth(), label = { Text("Private note") }, minLines = 10, shape = RectangleShape)
+            Text(localError.orEmpty(), color = MaterialTheme.colorScheme.error, modifier = Modifier.height(36.dp).padding(top = 8.dp))
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                Button(onClick = ::submit, shape = RectangleShape, modifier = Modifier.height(48.dp)) {
+                    Icon(Icons.Outlined.Save, contentDescription = null)
+                    Spacer(Modifier.size(8.dp))
+                    Text("Save encrypted")
+                }
+                OutlinedButton(onClick = onCancel, shape = RectangleShape, modifier = Modifier.height(48.dp)) { Text("Cancel") }
+            }
+            if (onDelete != null) {
+                TextButton(
+                    onClick = onDelete,
+                    modifier = Modifier.padding(top = 16.dp).height(48.dp),
+                    colors = ButtonDefaults.textButtonColors(contentColor = MaterialTheme.colorScheme.error),
+                ) {
+                    Icon(Icons.Outlined.Delete, contentDescription = null)
+                    Spacer(Modifier.size(8.dp))
+                    Text("Delete note")
+                }
+            }
+        }
+    }
+
+    duplicateFields?.let { values ->
+        AlertDialog(
+            onDismissRequest = { duplicateFields = null },
+            title = { Text("Likely duplicate note") },
+            text = { Text("A secure note with this title already exists. Save another note anyway?") },
+            confirmButton = { Button(onClick = { duplicateFields = null; onSave(values) }, shape = RectangleShape) { Text("Save anyway") } },
+            dismissButton = { TextButton(onClick = { duplicateFields = null }) { Text("Review fields") } },
+        )
+    }
 }
 
 @Composable

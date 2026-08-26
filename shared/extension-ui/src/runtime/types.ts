@@ -1,4 +1,4 @@
-import type { CapturedCredential, LoginFields, VaultItemKind } from "@ironkeep/shared";
+import type { CapturedCredential, CreditCardFields, IdentityFields, LoginFields, SecureNoteFields, VaultItemKind } from "@ironkeep/shared";
 
 export interface PublicVaultItem {
   id: string;
@@ -10,6 +10,18 @@ export interface PublicVaultItem {
 
 export interface PublicLogin extends PublicVaultItem, LoginFields {
   kind: "login";
+}
+
+export interface PublicSecureNote extends PublicVaultItem, SecureNoteFields {
+  kind: "secureNote";
+}
+
+export interface PublicCreditCard extends PublicVaultItem, CreditCardFields {
+  kind: "creditCard";
+}
+
+export interface PublicIdentity extends PublicVaultItem, IdentityFields {
+  kind: "identity";
 }
 
 export interface PublicSecuritySettings {
@@ -51,6 +63,21 @@ export type ExtensionRequest =
   | { type: "UPDATE_LOGIN"; itemId: string; fields: LoginFields; confirmDuplicate: boolean }
   | { type: "DELETE_LOGIN"; itemId: string; confirmed: boolean }
   | { type: "TOGGLE_LOGIN_FAVORITE"; itemId: string }
+  | { type: "GET_SECURE_NOTE"; itemId: string }
+  | { type: "CREATE_SECURE_NOTE"; fields: SecureNoteFields; confirmDuplicate: boolean }
+  | { type: "UPDATE_SECURE_NOTE"; itemId: string; fields: SecureNoteFields; confirmDuplicate: boolean }
+  | { type: "DELETE_SECURE_NOTE"; itemId: string; confirmed: boolean }
+  | { type: "TOGGLE_SECURE_NOTE_FAVORITE"; itemId: string }
+  | { type: "GET_CREDIT_CARD"; itemId: string }
+  | { type: "CREATE_CREDIT_CARD"; fields: CreditCardFields; confirmDuplicate: boolean }
+  | { type: "UPDATE_CREDIT_CARD"; itemId: string; fields: CreditCardFields; confirmDuplicate: boolean }
+  | { type: "DELETE_CREDIT_CARD"; itemId: string; confirmed: boolean }
+  | { type: "TOGGLE_CREDIT_CARD_FAVORITE"; itemId: string }
+  | { type: "GET_IDENTITY"; itemId: string }
+  | { type: "CREATE_IDENTITY"; fields: IdentityFields; confirmDuplicate: boolean }
+  | { type: "UPDATE_IDENTITY"; itemId: string; fields: IdentityFields; confirmDuplicate: boolean }
+  | { type: "DELETE_IDENTITY"; itemId: string; confirmed: boolean }
+  | { type: "TOGGLE_IDENTITY_FAVORITE"; itemId: string }
   | { type: "GET_MATCHES"; tabId: number }
   | { type: "FILL_ITEM"; itemId: string; tabId: number }
   | { type: "GET_SECURITY_SETTINGS" }
@@ -61,6 +88,9 @@ export type ExtensionResponse =
   | { ok: true; status: "empty" | "locked" | "unlocked" }
   | { ok: true; items: PublicVaultItem[] }
   | { ok: true; item: PublicLogin }
+  | { ok: true; item: PublicSecureNote }
+  | { ok: true; item: PublicCreditCard }
+  | { ok: true; item: PublicIdentity }
   | { ok: true; settings: PublicSecuritySettings }
   | { ok: true; copied: true; clearAfterSeconds: number }
   | { ok: false; error: "DUPLICATE"; items: PublicVaultItem[] }

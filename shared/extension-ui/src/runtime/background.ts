@@ -1,12 +1,24 @@
 import {
   addLogin,
+  addIdentity,
+  addCreditCard,
+  addSecureNote,
   createEmptyVault,
   createUnlockedVault,
   deleteLogin,
+  deleteIdentity,
+  deleteCreditCard,
+  deleteSecureNote,
   editLogin,
+  editIdentity,
+  editCreditCard,
+  editSecureNote,
   EphemeralCaptureStore,
   exactOriginLogins,
   findLikelyLoginDuplicates,
+  findLikelyIdentityDuplicates,
+  findLikelyCreditCardDuplicates,
+  findLikelySecureNoteDuplicates,
   loginFieldsForCapture,
   persistVaultMutation,
   SessionDeadline,
@@ -14,18 +26,27 @@ import {
   suggestCredentialCapture,
   titleForOrigin,
   toggleLoginFavorite,
+  toggleIdentityFavorite,
+  toggleCreditCardFavorite,
+  toggleSecureNoteFavorite,
   unlockVault,
   updateSecuritySettings,
   validCapturedCredential,
   type LoginFields,
+  type IdentityFields,
+  type IdentityItem,
+  type CreditCardFields,
+  type CreditCardItem,
   type LoginItem,
+  type SecureNoteFields,
+  type SecureNoteItem,
   type PendingCredentialCapture,
   type UnlockedVault,
   type VaultFile,
   type VaultItem,
 } from "@ironkeep/shared";
 import browser from "webextension-polyfill";
-import type { ContentRequest, ContentResponse, ExtensionRequest, ExtensionResponse, PublicCapturePrompt, PublicLogin, PublicVaultItem } from "./types.js";
+import type { ContentRequest, ContentResponse, ExtensionRequest, ExtensionResponse, PublicCapturePrompt, PublicCreditCard, PublicIdentity, PublicLogin, PublicSecureNote, PublicVaultItem } from "./types.js";
 
 const STORAGE_KEY = "ironkeep.encryptedVault.v1";
 const DEVICE_KEY = "ironkeep.deviceId";
@@ -182,10 +203,68 @@ function publicLogin(item: LoginItem): PublicLogin {
   };
 }
 
+function publicSecureNote(item: SecureNoteItem): PublicSecureNote {
+  return {
+    ...publicItem(item),
+    kind: "secureNote",
+    body: item.body,
+  };
+}
+
+function publicCreditCard(item: CreditCardItem): PublicCreditCard {
+  return {
+    ...publicItem(item),
+    kind: "creditCard",
+    cardholderName: item.cardholderName,
+    number: item.number,
+    expiryMonth: item.expiryMonth,
+    expiryYear: item.expiryYear,
+    verificationCode: item.verificationCode,
+    ...(item.pin ? { pin: item.pin } : {}),
+    notes: item.notes,
+  };
+}
+
+function publicIdentity(item: IdentityItem): PublicIdentity {
+  return {
+    ...publicItem(item),
+    kind: "identity",
+    firstName: item.firstName,
+    middleName: item.middleName,
+    lastName: item.lastName,
+    email: item.email,
+    phone: item.phone,
+    company: item.company,
+    addressLine1: item.addressLine1,
+    addressLine2: item.addressLine2,
+    city: item.city,
+    region: item.region,
+    postalCode: item.postalCode,
+    country: item.country,
+    notes: item.notes,
+  };
+}
+
 function validLoginFields(fields: LoginFields): boolean {
   return typeof fields.title === "string" && typeof fields.username === "string" &&
     typeof fields.password === "string" && Array.isArray(fields.uris) && fields.uris.every((value) => typeof value === "string") &&
     Array.isArray(fields.androidPackageNames) && fields.androidPackageNames.every((value) => typeof value === "string");
+}
+
+function validSecureNoteFields(fields: SecureNoteFields): boolean {
+  return typeof fields.title === "string" && typeof fields.body === "string";
+}
+
+function validCreditCardFields(fields: CreditCardFields): boolean {
+  return typeof fields.title === "string" && typeof fields.cardholderName === "string" && typeof fields.number === "string" &&
+    typeof fields.expiryMonth === "number" && typeof fields.expiryYear === "number" && typeof fields.verificationCode === "string" &&
+    (fields.pin === undefined || typeof fields.pin === "string") && typeof fields.notes === "string";
+}
+
+function validIdentityFields(fields: IdentityFields): boolean {
+  return [fields.title, fields.firstName, fields.middleName, fields.lastName, fields.email, fields.phone, fields.company,
+    fields.addressLine1, fields.addressLine2, fields.city, fields.region, fields.postalCode, fields.country, fields.notes]
+    .every((value) => typeof value === "string");
 }
 
 async function persist(payload: UnlockedVault["payload"]): Promise<boolean> {
@@ -315,6 +394,165 @@ async function handleRequest(request: ExtensionRequest): Promise<ExtensionRespon
         if (!await persist(next)) return { ok: false, error: "PERSISTENCE_FAILED" };
         const item = next.items.find((candidate): candidate is LoginItem => candidate.kind === "login" && candidate.id === request.itemId);
         return item ? { ok: true, item: publicLogin(item) } : { ok: false, error: "NOT_FOUND" };
+      } catch {
+        return { ok: false, error: "NOT_FOUND" };
+      }
+    }
+    case "GET_SECURE_NOTE": {
+      const item = unlockedVault?.payload.items.find((candidate): candidate is SecureNoteItem => candidate.kind === "secureNote" && candidate.id === request.itemId);
+      return item ? { ok: true, item: publicSecureNote(item) } : { ok: false, error: unlockedVault ? "NOT_FOUND" : "LOCKED" };
+    }
+    case "CREATE_SECURE_NOTE": {
+      if (!unlockedVault) return { ok: false, error: "LOCKED" };
+      if (!validSecureNoteFields(request.fields)) return { ok: false, error: "INVALID_REQUEST" };
+      const duplicates = findLikelySecureNoteDuplicates(unlockedVault.payload, request.fields);
+      if (duplicates.length && !request.confirmDuplicate) return { ok: false, error: "DUPLICATE", items: duplicates.map(publicItem) };
+      try {
+        const next = addSecureNote(unlockedVault.payload, request.fields, { deviceId: await deviceId() });
+        if (!await persist(next)) return { ok: false, error: "PERSISTENCE_FAILED" };
+        const item = next.items.at(-1);
+        return item?.kind === "secureNote" ? { ok: true, item: publicSecureNote(item) } : { ok: false, error: "INVALID_REQUEST" };
+      } catch {
+        return { ok: false, error: "INVALID_REQUEST" };
+      }
+    }
+    case "UPDATE_SECURE_NOTE": {
+      if (!unlockedVault) return { ok: false, error: "LOCKED" };
+      if (!validSecureNoteFields(request.fields)) return { ok: false, error: "INVALID_REQUEST" };
+      const duplicates = findLikelySecureNoteDuplicates(unlockedVault.payload, request.fields, request.itemId);
+      if (duplicates.length && !request.confirmDuplicate) return { ok: false, error: "DUPLICATE", items: duplicates.map(publicItem) };
+      try {
+        const next = editSecureNote(unlockedVault.payload, request.itemId, request.fields, { deviceId: await deviceId() });
+        if (!await persist(next)) return { ok: false, error: "PERSISTENCE_FAILED" };
+        const item = next.items.find((candidate): candidate is SecureNoteItem => candidate.kind === "secureNote" && candidate.id === request.itemId);
+        return item ? { ok: true, item: publicSecureNote(item) } : { ok: false, error: "NOT_FOUND" };
+      } catch (error) {
+        return { ok: false, error: error instanceof ReferenceError ? "NOT_FOUND" : "INVALID_REQUEST" };
+      }
+    }
+    case "DELETE_SECURE_NOTE": {
+      if (!unlockedVault) return { ok: false, error: "LOCKED" };
+      if (!request.confirmed) return { ok: false, error: "INVALID_REQUEST" };
+      try {
+        const next = deleteSecureNote(unlockedVault.payload, request.itemId, { deviceId: await deviceId() });
+        return await persist(next) ? { ok: true, status: "unlocked" } : { ok: false, error: "PERSISTENCE_FAILED" };
+      } catch {
+        return { ok: false, error: "NOT_FOUND" };
+      }
+    }
+    case "TOGGLE_SECURE_NOTE_FAVORITE": {
+      if (!unlockedVault) return { ok: false, error: "LOCKED" };
+      try {
+        const next = toggleSecureNoteFavorite(unlockedVault.payload, request.itemId, { deviceId: await deviceId() });
+        if (!await persist(next)) return { ok: false, error: "PERSISTENCE_FAILED" };
+        const item = next.items.find((candidate): candidate is SecureNoteItem => candidate.kind === "secureNote" && candidate.id === request.itemId);
+        return item ? { ok: true, item: publicSecureNote(item) } : { ok: false, error: "NOT_FOUND" };
+      } catch {
+        return { ok: false, error: "NOT_FOUND" };
+      }
+    }
+    case "GET_CREDIT_CARD": {
+      const item = unlockedVault?.payload.items.find((candidate): candidate is CreditCardItem => candidate.kind === "creditCard" && candidate.id === request.itemId);
+      return item ? { ok: true, item: publicCreditCard(item) } : { ok: false, error: unlockedVault ? "NOT_FOUND" : "LOCKED" };
+    }
+    case "CREATE_CREDIT_CARD": {
+      if (!unlockedVault) return { ok: false, error: "LOCKED" };
+      if (!validCreditCardFields(request.fields)) return { ok: false, error: "INVALID_REQUEST" };
+      const duplicates = findLikelyCreditCardDuplicates(unlockedVault.payload, request.fields);
+      if (duplicates.length && !request.confirmDuplicate) return { ok: false, error: "DUPLICATE", items: duplicates.map(publicItem) };
+      try {
+        const next = addCreditCard(unlockedVault.payload, request.fields, { deviceId: await deviceId() });
+        if (!await persist(next)) return { ok: false, error: "PERSISTENCE_FAILED" };
+        const item = next.items.at(-1);
+        return item?.kind === "creditCard" ? { ok: true, item: publicCreditCard(item) } : { ok: false, error: "INVALID_REQUEST" };
+      } catch {
+        return { ok: false, error: "INVALID_REQUEST" };
+      }
+    }
+    case "UPDATE_CREDIT_CARD": {
+      if (!unlockedVault) return { ok: false, error: "LOCKED" };
+      if (!validCreditCardFields(request.fields)) return { ok: false, error: "INVALID_REQUEST" };
+      const duplicates = findLikelyCreditCardDuplicates(unlockedVault.payload, request.fields, request.itemId);
+      if (duplicates.length && !request.confirmDuplicate) return { ok: false, error: "DUPLICATE", items: duplicates.map(publicItem) };
+      try {
+        const next = editCreditCard(unlockedVault.payload, request.itemId, request.fields, { deviceId: await deviceId() });
+        if (!await persist(next)) return { ok: false, error: "PERSISTENCE_FAILED" };
+        const item = next.items.find((candidate): candidate is CreditCardItem => candidate.kind === "creditCard" && candidate.id === request.itemId);
+        return item ? { ok: true, item: publicCreditCard(item) } : { ok: false, error: "NOT_FOUND" };
+      } catch (error) {
+        return { ok: false, error: error instanceof ReferenceError ? "NOT_FOUND" : "INVALID_REQUEST" };
+      }
+    }
+    case "DELETE_CREDIT_CARD": {
+      if (!unlockedVault) return { ok: false, error: "LOCKED" };
+      if (!request.confirmed) return { ok: false, error: "INVALID_REQUEST" };
+      try {
+        const next = deleteCreditCard(unlockedVault.payload, request.itemId, { deviceId: await deviceId() });
+        return await persist(next) ? { ok: true, status: "unlocked" } : { ok: false, error: "PERSISTENCE_FAILED" };
+      } catch {
+        return { ok: false, error: "NOT_FOUND" };
+      }
+    }
+    case "TOGGLE_CREDIT_CARD_FAVORITE": {
+      if (!unlockedVault) return { ok: false, error: "LOCKED" };
+      try {
+        const next = toggleCreditCardFavorite(unlockedVault.payload, request.itemId, { deviceId: await deviceId() });
+        if (!await persist(next)) return { ok: false, error: "PERSISTENCE_FAILED" };
+        const item = next.items.find((candidate): candidate is CreditCardItem => candidate.kind === "creditCard" && candidate.id === request.itemId);
+        return item ? { ok: true, item: publicCreditCard(item) } : { ok: false, error: "NOT_FOUND" };
+      } catch {
+        return { ok: false, error: "NOT_FOUND" };
+      }
+    }
+    case "GET_IDENTITY": {
+      const item = unlockedVault?.payload.items.find((candidate): candidate is IdentityItem => candidate.kind === "identity" && candidate.id === request.itemId);
+      return item ? { ok: true, item: publicIdentity(item) } : { ok: false, error: unlockedVault ? "NOT_FOUND" : "LOCKED" };
+    }
+    case "CREATE_IDENTITY": {
+      if (!unlockedVault) return { ok: false, error: "LOCKED" };
+      if (!validIdentityFields(request.fields)) return { ok: false, error: "INVALID_REQUEST" };
+      const duplicates = findLikelyIdentityDuplicates(unlockedVault.payload, request.fields);
+      if (duplicates.length && !request.confirmDuplicate) return { ok: false, error: "DUPLICATE", items: duplicates.map(publicItem) };
+      try {
+        const next = addIdentity(unlockedVault.payload, request.fields, { deviceId: await deviceId() });
+        if (!await persist(next)) return { ok: false, error: "PERSISTENCE_FAILED" };
+        const item = next.items.at(-1);
+        return item?.kind === "identity" ? { ok: true, item: publicIdentity(item) } : { ok: false, error: "INVALID_REQUEST" };
+      } catch {
+        return { ok: false, error: "INVALID_REQUEST" };
+      }
+    }
+    case "UPDATE_IDENTITY": {
+      if (!unlockedVault) return { ok: false, error: "LOCKED" };
+      if (!validIdentityFields(request.fields)) return { ok: false, error: "INVALID_REQUEST" };
+      const duplicates = findLikelyIdentityDuplicates(unlockedVault.payload, request.fields, request.itemId);
+      if (duplicates.length && !request.confirmDuplicate) return { ok: false, error: "DUPLICATE", items: duplicates.map(publicItem) };
+      try {
+        const next = editIdentity(unlockedVault.payload, request.itemId, request.fields, { deviceId: await deviceId() });
+        if (!await persist(next)) return { ok: false, error: "PERSISTENCE_FAILED" };
+        const item = next.items.find((candidate): candidate is IdentityItem => candidate.kind === "identity" && candidate.id === request.itemId);
+        return item ? { ok: true, item: publicIdentity(item) } : { ok: false, error: "NOT_FOUND" };
+      } catch (error) {
+        return { ok: false, error: error instanceof ReferenceError ? "NOT_FOUND" : "INVALID_REQUEST" };
+      }
+    }
+    case "DELETE_IDENTITY": {
+      if (!unlockedVault) return { ok: false, error: "LOCKED" };
+      if (!request.confirmed) return { ok: false, error: "INVALID_REQUEST" };
+      try {
+        const next = deleteIdentity(unlockedVault.payload, request.itemId, { deviceId: await deviceId() });
+        return await persist(next) ? { ok: true, status: "unlocked" } : { ok: false, error: "PERSISTENCE_FAILED" };
+      } catch {
+        return { ok: false, error: "NOT_FOUND" };
+      }
+    }
+    case "TOGGLE_IDENTITY_FAVORITE": {
+      if (!unlockedVault) return { ok: false, error: "LOCKED" };
+      try {
+        const next = toggleIdentityFavorite(unlockedVault.payload, request.itemId, { deviceId: await deviceId() });
+        if (!await persist(next)) return { ok: false, error: "PERSISTENCE_FAILED" };
+        const item = next.items.find((candidate): candidate is IdentityItem => candidate.kind === "identity" && candidate.id === request.itemId);
+        return item ? { ok: true, item: publicIdentity(item) } : { ok: false, error: "NOT_FOUND" };
       } catch {
         return { ok: false, error: "NOT_FOUND" };
       }

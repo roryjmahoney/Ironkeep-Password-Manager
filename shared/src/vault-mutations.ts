@@ -1,4 +1,4 @@
-import type { LoginItem, VaultPayload } from "./models.js";
+import type { CreditCardItem, IdentityItem, LoginItem, SecureNoteItem, VaultPayload } from "./models.js";
 import { validateSecuritySettings } from "./session-security.js";
 
 export interface LoginFields {
@@ -7,6 +7,39 @@ export interface LoginFields {
   password: string;
   uris: string[];
   androidPackageNames: string[];
+}
+
+export interface SecureNoteFields {
+  title: string;
+  body: string;
+}
+
+export interface CreditCardFields {
+  title: string;
+  cardholderName: string;
+  number: string;
+  expiryMonth: number;
+  expiryYear: number;
+  verificationCode: string;
+  pin?: string;
+  notes: string;
+}
+
+export interface IdentityFields {
+  title: string;
+  firstName: string;
+  middleName: string;
+  lastName: string;
+  email: string;
+  phone: string;
+  company: string;
+  addressLine1: string;
+  addressLine2: string;
+  city: string;
+  region: string;
+  postalCode: string;
+  country: string;
+  notes: string;
 }
 
 export interface MutationContext {
@@ -28,6 +61,57 @@ function validateFields(fields: LoginFields): LoginFields {
     androidPackageNames: [...new Set(fields.androidPackageNames.map((value) => value.trim()).filter(Boolean))],
   };
   if (!normalized.title || !normalized.password) throw new RangeError("Login title and password are required");
+  return normalized;
+}
+
+function validateSecureNoteFields(fields: SecureNoteFields): SecureNoteFields {
+  const normalized = { title: fields.title.trim(), body: fields.body };
+  if (!normalized.title || !normalized.body.trim()) throw new RangeError("Secure note title and body are required");
+  return normalized;
+}
+
+function validateCreditCardFields(fields: CreditCardFields): CreditCardFields {
+  const normalized = {
+    title: fields.title.trim(),
+    cardholderName: fields.cardholderName.trim(),
+    number: fields.number.replace(/[\s-]/gu, ""),
+    expiryMonth: fields.expiryMonth,
+    expiryYear: fields.expiryYear,
+    verificationCode: fields.verificationCode.trim(),
+    ...(fields.pin?.trim() ? { pin: fields.pin.trim() } : {}),
+    notes: fields.notes,
+  };
+  if (!normalized.title || !normalized.cardholderName || !/^\d{12,19}$/u.test(normalized.number)) {
+    throw new RangeError("Card title, cardholder, and a valid card number are required");
+  }
+  if (!Number.isInteger(normalized.expiryMonth) || normalized.expiryMonth < 1 || normalized.expiryMonth > 12 ||
+      !Number.isInteger(normalized.expiryYear) || normalized.expiryYear < 2000 || normalized.expiryYear > 9999 ||
+      !/^\d{3,4}$/u.test(normalized.verificationCode) || (normalized.pin !== undefined && !/^\d{3,12}$/u.test(normalized.pin))) {
+    throw new RangeError("Card expiry or verification fields are invalid");
+  }
+  return normalized;
+}
+
+function validateIdentityFields(fields: IdentityFields): IdentityFields {
+  const normalized = {
+    title: fields.title.trim(),
+    firstName: fields.firstName.trim(),
+    middleName: fields.middleName.trim(),
+    lastName: fields.lastName.trim(),
+    email: fields.email.trim(),
+    phone: fields.phone.trim(),
+    company: fields.company.trim(),
+    addressLine1: fields.addressLine1.trim(),
+    addressLine2: fields.addressLine2.trim(),
+    city: fields.city.trim(),
+    region: fields.region.trim(),
+    postalCode: fields.postalCode.trim(),
+    country: fields.country.trim(),
+    notes: fields.notes,
+  };
+  const hasDetails = Object.entries(normalized).some(([key, value]) => key !== "title" && key !== "notes" && value.length > 0);
+  if (!normalized.title || !hasDetails) throw new RangeError("Identity title and at least one identity field are required");
+  if (normalized.email && (!normalized.email.includes("@") || normalized.email.length > 320)) throw new RangeError("Identity email is invalid");
   return normalized;
 }
 
@@ -99,6 +183,212 @@ export function toggleLoginFavorite(payload: VaultPayload, itemId: string, conte
     ...next,
     items: payload.items.map((item) => item.id === itemId ? { ...existing, favorite: !existing.favorite, updatedAt, revision: existing.revision + 1 } : item),
   };
+}
+
+export function addSecureNote(payload: VaultPayload, fields: SecureNoteFields, context: MutationContext): VaultPayload {
+  const values = validateSecureNoteFields(fields);
+  const updatedAt = timestamp(context);
+  const next = nextVault(payload, context, updatedAt);
+  const itemId = context.itemId ?? crypto.randomUUID();
+  if (payload.items.some((item) => item.id === itemId) || payload.tombstones.some((entry) => entry.itemId === itemId)) {
+    throw new RangeError("Secure note identifier already exists");
+  }
+  const note: SecureNoteItem = {
+    id: itemId,
+    kind: "secureNote",
+    ...values,
+    tagIds: [],
+    favorite: false,
+    createdAt: updatedAt,
+    updatedAt,
+    revision: 1,
+  };
+  return { ...next, items: [...payload.items, note] };
+}
+
+export function editSecureNote(payload: VaultPayload, itemId: string, fields: SecureNoteFields, context: MutationContext): VaultPayload {
+  const values = validateSecureNoteFields(fields);
+  const existing = payload.items.find((item): item is SecureNoteItem => item.kind === "secureNote" && item.id === itemId);
+  if (!existing) throw new ReferenceError("Secure note not found");
+  const updatedAt = timestamp(context);
+  const next = nextVault(payload, context, updatedAt);
+  return {
+    ...next,
+    items: payload.items.map((item) => item.id === itemId ? { ...existing, ...values, updatedAt, revision: existing.revision + 1 } : item),
+  };
+}
+
+export function deleteSecureNote(payload: VaultPayload, itemId: string, context: MutationContext): VaultPayload {
+  const existing = payload.items.find((item) => item.kind === "secureNote" && item.id === itemId);
+  if (!existing) throw new ReferenceError("Secure note not found");
+  const updatedAt = timestamp(context);
+  const next = nextVault(payload, context, updatedAt);
+  return {
+    ...next,
+    items: payload.items.filter((item) => item.id !== itemId),
+    tombstones: [
+      ...payload.tombstones.filter((entry) => entry.itemId !== itemId),
+      { itemId, deletedAt: updatedAt, revision: next.revision, deviceId: context.deviceId },
+    ],
+  };
+}
+
+export function toggleSecureNoteFavorite(payload: VaultPayload, itemId: string, context: MutationContext): VaultPayload {
+  const existing = payload.items.find((item): item is SecureNoteItem => item.kind === "secureNote" && item.id === itemId);
+  if (!existing) throw new ReferenceError("Secure note not found");
+  const updatedAt = timestamp(context);
+  const next = nextVault(payload, context, updatedAt);
+  return {
+    ...next,
+    items: payload.items.map((item) => item.id === itemId ? { ...existing, favorite: !existing.favorite, updatedAt, revision: existing.revision + 1 } : item),
+  };
+}
+
+export function findLikelySecureNoteDuplicates(payload: VaultPayload, fields: SecureNoteFields, excludeItemId?: string): SecureNoteItem[] {
+  const title = fields.title.trim().toLowerCase();
+  if (!title) return [];
+  return payload.items.filter((item): item is SecureNoteItem =>
+    item.kind === "secureNote" && item.id !== excludeItemId && item.title.trim().toLowerCase() === title,
+  );
+}
+
+export function addCreditCard(payload: VaultPayload, fields: CreditCardFields, context: MutationContext): VaultPayload {
+  const values = validateCreditCardFields(fields);
+  const updatedAt = timestamp(context);
+  const next = nextVault(payload, context, updatedAt);
+  const itemId = context.itemId ?? crypto.randomUUID();
+  if (payload.items.some((item) => item.id === itemId) || payload.tombstones.some((entry) => entry.itemId === itemId)) {
+    throw new RangeError("Credit card identifier already exists");
+  }
+  const card: CreditCardItem = {
+    id: itemId,
+    kind: "creditCard",
+    ...values,
+    tagIds: [],
+    favorite: false,
+    createdAt: updatedAt,
+    updatedAt,
+    revision: 1,
+  };
+  return { ...next, items: [...payload.items, card] };
+}
+
+export function editCreditCard(payload: VaultPayload, itemId: string, fields: CreditCardFields, context: MutationContext): VaultPayload {
+  const values = validateCreditCardFields(fields);
+  const existing = payload.items.find((item): item is CreditCardItem => item.kind === "creditCard" && item.id === itemId);
+  if (!existing) throw new ReferenceError("Credit card not found");
+  const updatedAt = timestamp(context);
+  const next = nextVault(payload, context, updatedAt);
+  return {
+    ...next,
+    items: payload.items.map((item) => item.id === itemId ? { ...existing, ...values, updatedAt, revision: existing.revision + 1 } : item),
+  };
+}
+
+export function deleteCreditCard(payload: VaultPayload, itemId: string, context: MutationContext): VaultPayload {
+  const existing = payload.items.find((item) => item.kind === "creditCard" && item.id === itemId);
+  if (!existing) throw new ReferenceError("Credit card not found");
+  const updatedAt = timestamp(context);
+  const next = nextVault(payload, context, updatedAt);
+  return {
+    ...next,
+    items: payload.items.filter((item) => item.id !== itemId),
+    tombstones: [
+      ...payload.tombstones.filter((entry) => entry.itemId !== itemId),
+      { itemId, deletedAt: updatedAt, revision: next.revision, deviceId: context.deviceId },
+    ],
+  };
+}
+
+export function toggleCreditCardFavorite(payload: VaultPayload, itemId: string, context: MutationContext): VaultPayload {
+  const existing = payload.items.find((item): item is CreditCardItem => item.kind === "creditCard" && item.id === itemId);
+  if (!existing) throw new ReferenceError("Credit card not found");
+  const updatedAt = timestamp(context);
+  const next = nextVault(payload, context, updatedAt);
+  return {
+    ...next,
+    items: payload.items.map((item) => item.id === itemId ? { ...existing, favorite: !existing.favorite, updatedAt, revision: existing.revision + 1 } : item),
+  };
+}
+
+export function findLikelyCreditCardDuplicates(payload: VaultPayload, fields: CreditCardFields, excludeItemId?: string): CreditCardItem[] {
+  const number = fields.number.replace(/[\s-]/gu, "");
+  if (!number) return [];
+  return payload.items.filter((item): item is CreditCardItem =>
+    item.kind === "creditCard" && item.id !== excludeItemId && item.number.replace(/[\s-]/gu, "") === number,
+  );
+}
+
+export function addIdentity(payload: VaultPayload, fields: IdentityFields, context: MutationContext): VaultPayload {
+  const values = validateIdentityFields(fields);
+  const updatedAt = timestamp(context);
+  const next = nextVault(payload, context, updatedAt);
+  const itemId = context.itemId ?? crypto.randomUUID();
+  if (payload.items.some((item) => item.id === itemId) || payload.tombstones.some((entry) => entry.itemId === itemId)) {
+    throw new RangeError("Identity identifier already exists");
+  }
+  const identity: IdentityItem = {
+    id: itemId,
+    kind: "identity",
+    ...values,
+    tagIds: [],
+    favorite: false,
+    createdAt: updatedAt,
+    updatedAt,
+    revision: 1,
+  };
+  return { ...next, items: [...payload.items, identity] };
+}
+
+export function editIdentity(payload: VaultPayload, itemId: string, fields: IdentityFields, context: MutationContext): VaultPayload {
+  const values = validateIdentityFields(fields);
+  const existing = payload.items.find((item): item is IdentityItem => item.kind === "identity" && item.id === itemId);
+  if (!existing) throw new ReferenceError("Identity not found");
+  const updatedAt = timestamp(context);
+  const next = nextVault(payload, context, updatedAt);
+  return {
+    ...next,
+    items: payload.items.map((item) => item.id === itemId ? { ...existing, ...values, updatedAt, revision: existing.revision + 1 } : item),
+  };
+}
+
+export function deleteIdentity(payload: VaultPayload, itemId: string, context: MutationContext): VaultPayload {
+  const existing = payload.items.find((item) => item.kind === "identity" && item.id === itemId);
+  if (!existing) throw new ReferenceError("Identity not found");
+  const updatedAt = timestamp(context);
+  const next = nextVault(payload, context, updatedAt);
+  return {
+    ...next,
+    items: payload.items.filter((item) => item.id !== itemId),
+    tombstones: [
+      ...payload.tombstones.filter((entry) => entry.itemId !== itemId),
+      { itemId, deletedAt: updatedAt, revision: next.revision, deviceId: context.deviceId },
+    ],
+  };
+}
+
+export function toggleIdentityFavorite(payload: VaultPayload, itemId: string, context: MutationContext): VaultPayload {
+  const existing = payload.items.find((item): item is IdentityItem => item.kind === "identity" && item.id === itemId);
+  if (!existing) throw new ReferenceError("Identity not found");
+  const updatedAt = timestamp(context);
+  const next = nextVault(payload, context, updatedAt);
+  return {
+    ...next,
+    items: payload.items.map((item) => item.id === itemId ? { ...existing, favorite: !existing.favorite, updatedAt, revision: existing.revision + 1 } : item),
+  };
+}
+
+export function findLikelyIdentityDuplicates(payload: VaultPayload, fields: IdentityFields, excludeItemId?: string): IdentityItem[] {
+  const email = fields.email.trim().toLowerCase();
+  const firstName = fields.firstName.trim().toLowerCase();
+  const lastName = fields.lastName.trim().toLowerCase();
+  const title = fields.title.trim().toLowerCase();
+  return payload.items.filter((item): item is IdentityItem => {
+    if (item.kind !== "identity" || item.id === excludeItemId) return false;
+    if (email && item.email.trim().toLowerCase() === email) return true;
+    return Boolean(firstName || lastName) && item.firstName.trim().toLowerCase() === firstName &&
+      item.lastName.trim().toLowerCase() === lastName && item.title.trim().toLowerCase() === title;
+  });
 }
 
 export function updateSecuritySettings(

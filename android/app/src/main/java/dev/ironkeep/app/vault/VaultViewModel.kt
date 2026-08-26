@@ -16,6 +16,9 @@ import dev.ironkeep.app.vault.crypto.BiometricVaultRecord
 import dev.ironkeep.app.vault.crypto.VaultAuthenticationException
 import dev.ironkeep.app.vault.crypto.VaultCrypto
 import dev.ironkeep.app.vault.model.LoginFields
+import dev.ironkeep.app.vault.model.CreditCardFields
+import dev.ironkeep.app.vault.model.IdentityFields
+import dev.ironkeep.app.vault.model.SecureNoteFields
 import dev.ironkeep.app.vault.model.VaultFile
 import dev.ironkeep.app.vault.model.VaultMutations
 import dev.ironkeep.app.vault.model.VaultPayload
@@ -400,6 +403,30 @@ class VaultViewModel(application: Application) : AndroidViewModel(application) {
     fun deleteLogin(itemId: String) = mutate { payload -> VaultMutations.deleteLogin(payload, itemId, deviceId()) }
 
     fun toggleLoginFavorite(itemId: String) = mutate { payload -> VaultMutations.toggleFavorite(payload, itemId, deviceId()) }
+
+    fun addSecureNote(fields: SecureNoteFields) = mutate { payload -> VaultMutations.addSecureNote(payload, fields, deviceId()) }
+
+    fun editSecureNote(itemId: String, fields: SecureNoteFields) = mutate { payload -> VaultMutations.editSecureNote(payload, itemId, fields, deviceId()) }
+
+    fun deleteSecureNote(itemId: String) = mutate { payload -> VaultMutations.deleteSecureNote(payload, itemId, deviceId()) }
+
+    fun toggleSecureNoteFavorite(itemId: String) = mutate { payload -> VaultMutations.toggleSecureNoteFavorite(payload, itemId, deviceId()) }
+
+    fun addCreditCard(fields: CreditCardFields) = mutate { payload -> VaultMutations.addCreditCard(payload, fields, deviceId()) }
+
+    fun editCreditCard(itemId: String, fields: CreditCardFields) = mutate { payload -> VaultMutations.editCreditCard(payload, itemId, fields, deviceId()) }
+
+    fun deleteCreditCard(itemId: String) = mutate { payload -> VaultMutations.deleteCreditCard(payload, itemId, deviceId()) }
+
+    fun toggleCreditCardFavorite(itemId: String) = mutate { payload -> VaultMutations.toggleCreditCardFavorite(payload, itemId, deviceId()) }
+
+    fun addIdentity(fields: IdentityFields) = mutate { payload -> VaultMutations.addIdentity(payload, fields, deviceId()) }
+
+    fun editIdentity(itemId: String, fields: IdentityFields) = mutate { payload -> VaultMutations.editIdentity(payload, itemId, fields, deviceId()) }
+
+    fun deleteIdentity(itemId: String) = mutate { payload -> VaultMutations.deleteIdentity(payload, itemId, deviceId()) }
+
+    fun toggleIdentityFavorite(itemId: String) = mutate { payload -> VaultMutations.toggleIdentityFavorite(payload, itemId, deviceId()) }
 
     private fun mutate(notice: String? = null, transform: (VaultPayload) -> VaultPayload) {
         recordUserActivity()

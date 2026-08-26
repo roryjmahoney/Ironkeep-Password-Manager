@@ -15,14 +15,14 @@ import {
   ShieldCheck,
   UserRound,
 } from "lucide-react";
-import { useCallback, useDeferredValue, useEffect, useMemo, useRef, useState, type FormEvent, type ReactNode } from "react";
+import { useCallback, useDeferredValue, useEffect, useMemo, useRef, useState, type ChangeEvent, type FormEvent, type ReactNode } from "react";
 import browser from "webextension-polyfill";
 import { Button } from "./components/ui/Button.js";
 import { Input } from "./components/ui/Input.js";
 import { PasswordInput } from "./components/ui/PasswordInput.js";
 import { SearchInput } from "./components/ui/SearchInput.js";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "./components/ui/Tabs.js";
-import type { ExtensionRequest, ExtensionResponse, PublicLogin, PublicSecuritySettings, PublicVaultItem } from "./runtime/types.js";
+import type { ExtensionRequest, ExtensionResponse, PublicCreditCard, PublicIdentity, PublicLogin, PublicSecureNote, PublicSecuritySettings, PublicVaultItem } from "./runtime/types.js";
 
 type ViewState = "loading" | "empty" | "locked" | "unlocked";
 
@@ -232,9 +232,218 @@ function LoginEditor({ item, onCancel, onSaved }: { item: PublicLogin | null; on
   );
 }
 
+function SecureNoteEditor({ item, onCancel, onSaved }: { item: PublicSecureNote | null; onCancel: () => void; onSaved: () => void }) {
+  const [title, setTitle] = useState(item?.title ?? "");
+  const [body, setBody] = useState(item?.body ?? "");
+  const [error, setError] = useState("");
+  const [duplicateWarning, setDuplicateWarning] = useState("");
+  const [busy, setBusy] = useState(false);
+
+  async function save(confirmDuplicate = false) {
+    setError("");
+    setDuplicateWarning("");
+    if (!title.trim() || !body.trim()) {
+      setError("Title and note body are required.");
+      return;
+    }
+    setBusy(true);
+    try {
+      const fields = { title, body };
+      const response = await send(item
+        ? { type: "UPDATE_SECURE_NOTE", itemId: item.id, fields, confirmDuplicate }
+        : { type: "CREATE_SECURE_NOTE", fields, confirmDuplicate });
+      if (response.ok) onSaved();
+      else if (response.error === "DUPLICATE") setDuplicateWarning(`Likely duplicate: ${response.items.map((candidate) => candidate.title).join(", ")}.`);
+      else setError(response.error === "PERSISTENCE_FAILED" ? "Encrypted vault could not be saved. Previous data is intact." : "Secure note could not be saved.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function remove() {
+    if (!item || !window.confirm(`Delete ${item.title}? This creates a sync tombstone.`)) return;
+    setBusy(true);
+    try {
+      const response = await send({ type: "DELETE_SECURE_NOTE", itemId: item.id, confirmed: true });
+      if (response.ok) onSaved();
+      else setError(response.error === "PERSISTENCE_FAILED" ? "Encrypted vault could not be saved. Previous data is intact." : "Secure note could not be deleted.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <form className="space-y-4 px-5 py-5" onSubmit={(event) => { event.preventDefault(); void save(); }}>
+      <div><p className="text-[10px] font-bold uppercase tracking-[0.2em] text-brass">Secure note</p><h2 className="mt-1 font-display text-3xl">{item ? "Edit note" : "Add note"}</h2></div>
+      <FieldLabel label="Title"><Input autoFocus value={title} onChange={(event) => setTitle(event.target.value)} /></FieldLabel>
+      <FieldLabel label="Private note"><textarea className="min-h-48 w-full resize-y border border-line bg-field px-3 py-2 text-sm text-foreground outline-none focus:border-brass focus:ring-2 focus:ring-brass/20" value={body} onChange={(event) => setBody(event.target.value)} /></FieldLabel>
+      <div aria-live="polite" className="min-h-5 text-sm text-danger">{error || duplicateWarning}</div>
+      <div className="flex flex-wrap gap-2">
+        <Button type="submit" disabled={busy}><Save size={15} aria-hidden="true" />Save encrypted</Button>
+        {duplicateWarning ? <Button type="button" variant="outline" disabled={busy} onClick={() => void save(true)}>Save anyway</Button> : null}
+        <Button type="button" variant="ghost" onClick={onCancel}>Cancel</Button>
+        {item ? <Button className="text-danger" type="button" variant="ghost" disabled={busy} onClick={() => void remove()}><Trash2 size={15} aria-hidden="true" />Delete</Button> : null}
+      </div>
+    </form>
+  );
+}
+
+function CreditCardEditor({ item, onCancel, onSaved }: { item: PublicCreditCard | null; onCancel: () => void; onSaved: () => void }) {
+  const [title, setTitle] = useState(item?.title ?? "");
+  const [cardholderName, setCardholderName] = useState(item?.cardholderName ?? "");
+  const [number, setNumber] = useState(item?.number ?? "");
+  const [expiryMonth, setExpiryMonth] = useState(item?.expiryMonth ?? 1);
+  const [expiryYear, setExpiryYear] = useState(item?.expiryYear ?? new Date().getUTCFullYear());
+  const [verificationCode, setVerificationCode] = useState(item?.verificationCode ?? "");
+  const [pin, setPin] = useState(item?.pin ?? "");
+  const [notes, setNotes] = useState(item?.notes ?? "");
+  const [error, setError] = useState("");
+  const [duplicateWarning, setDuplicateWarning] = useState("");
+  const [busy, setBusy] = useState(false);
+
+  async function save(confirmDuplicate = false) {
+    setError("");
+    setDuplicateWarning("");
+    if (!title.trim() || !cardholderName.trim() || !/^\d{12,19}$/u.test(number.replace(/[\s-]/gu, "")) || expiryMonth < 1 || expiryMonth > 12 || expiryYear < 2000 || !/^\d{3,4}$/u.test(verificationCode)) {
+      setError("Enter a title, cardholder, valid card number, expiry, and verification code.");
+      return;
+    }
+    setBusy(true);
+    try {
+      const fields = { title, cardholderName, number, expiryMonth, expiryYear, verificationCode, ...(pin ? { pin } : {}), notes };
+      const response = await send(item
+        ? { type: "UPDATE_CREDIT_CARD", itemId: item.id, fields, confirmDuplicate }
+        : { type: "CREATE_CREDIT_CARD", fields, confirmDuplicate });
+      if (response.ok) onSaved();
+      else if (response.error === "DUPLICATE") setDuplicateWarning("A card with this number already exists.");
+      else setError(response.error === "PERSISTENCE_FAILED" ? "Encrypted vault could not be saved. Previous data is intact." : "Credit card could not be saved.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function remove() {
+    if (!item || !window.confirm(`Delete ${item.title}? This creates a sync tombstone.`)) return;
+    setBusy(true);
+    try {
+      const response = await send({ type: "DELETE_CREDIT_CARD", itemId: item.id, confirmed: true });
+      if (response.ok) onSaved();
+      else setError(response.error === "PERSISTENCE_FAILED" ? "Encrypted vault could not be saved. Previous data is intact." : "Credit card could not be deleted.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  const textareaClass = "min-h-20 w-full resize-y border border-line bg-field px-3 py-2 text-sm text-foreground outline-none focus:border-brass focus:ring-2 focus:ring-brass/20";
+  return (
+    <form className="space-y-4 px-5 py-5" onSubmit={(event) => { event.preventDefault(); void save(); }}>
+      <div><p className="text-[10px] font-bold uppercase tracking-[0.2em] text-brass">Payment card</p><h2 className="mt-1 font-display text-3xl">{item ? "Edit card" : "Add card"}</h2></div>
+      <FieldLabel label="Title"><Input autoFocus value={title} onChange={(event) => setTitle(event.target.value)} /></FieldLabel>
+      <FieldLabel label="Cardholder name"><Input value={cardholderName} onChange={(event) => setCardholderName(event.target.value)} /></FieldLabel>
+      <PasswordInput label="Card number" value={number} onChange={(event) => setNumber(event.target.value)} autoComplete="cc-number" />
+      <div className="grid grid-cols-2 gap-3">
+        <FieldLabel label="Expiry month"><Input inputMode="numeric" value={String(expiryMonth)} onChange={(event) => setExpiryMonth(Number(event.target.value))} /></FieldLabel>
+        <FieldLabel label="Expiry year"><Input inputMode="numeric" value={String(expiryYear)} onChange={(event) => setExpiryYear(Number(event.target.value))} /></FieldLabel>
+      </div>
+      <div className="grid grid-cols-2 gap-3">
+        <PasswordInput label="Verification code" value={verificationCode} onChange={(event) => setVerificationCode(event.target.value)} autoComplete="cc-csc" />
+        <PasswordInput label="PIN (optional)" value={pin} onChange={(event) => setPin(event.target.value)} autoComplete="off" />
+      </div>
+      <FieldLabel label="Notes"><textarea className={textareaClass} value={notes} onChange={(event) => setNotes(event.target.value)} /></FieldLabel>
+      <div aria-live="polite" className="min-h-5 text-sm text-danger">{error || duplicateWarning}</div>
+      <div className="flex flex-wrap gap-2">
+        <Button type="submit" disabled={busy}><Save size={15} aria-hidden="true" />Save encrypted</Button>
+        {duplicateWarning ? <Button type="button" variant="outline" disabled={busy} onClick={() => void save(true)}>Save anyway</Button> : null}
+        <Button type="button" variant="ghost" onClick={onCancel}>Cancel</Button>
+        {item ? <Button className="text-danger" type="button" variant="ghost" disabled={busy} onClick={() => void remove()}><Trash2 size={15} aria-hidden="true" />Delete</Button> : null}
+      </div>
+    </form>
+  );
+}
+
+function IdentityEditor({ item, onCancel, onSaved }: { item: PublicIdentity | null; onCancel: () => void; onSaved: () => void }) {
+  const [fields, setFields] = useState(() => ({
+    title: item?.title ?? "", firstName: item?.firstName ?? "", middleName: item?.middleName ?? "", lastName: item?.lastName ?? "",
+    email: item?.email ?? "", phone: item?.phone ?? "", company: item?.company ?? "", addressLine1: item?.addressLine1 ?? "",
+    addressLine2: item?.addressLine2 ?? "", city: item?.city ?? "", region: item?.region ?? "", postalCode: item?.postalCode ?? "",
+    country: item?.country ?? "", notes: item?.notes ?? "",
+  }));
+  const [error, setError] = useState("");
+  const [duplicateWarning, setDuplicateWarning] = useState("");
+  const [busy, setBusy] = useState(false);
+  const update = (key: keyof typeof fields) => (event: ChangeEvent<HTMLInputElement | HTMLTextAreaElement>) => {
+    setFields((current) => ({ ...current, [key]: event.target.value }));
+    setError("");
+  };
+
+  async function save(confirmDuplicate = false) {
+    setError("");
+    setDuplicateWarning("");
+    const hasDetails = Object.entries(fields).some(([key, value]) => key !== "title" && key !== "notes" && value.trim());
+    if (!fields.title.trim() || !hasDetails || (fields.email && !fields.email.includes("@"))) {
+      setError("Enter a title and at least one valid identity field.");
+      return;
+    }
+    setBusy(true);
+    try {
+      const response = await send(item
+        ? { type: "UPDATE_IDENTITY", itemId: item.id, fields, confirmDuplicate }
+        : { type: "CREATE_IDENTITY", fields, confirmDuplicate });
+      if (response.ok) onSaved();
+      else if (response.error === "DUPLICATE") setDuplicateWarning("An identity with this email or name already exists.");
+      else setError(response.error === "PERSISTENCE_FAILED" ? "Encrypted vault could not be saved. Previous data is intact." : "Identity could not be saved.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function remove() {
+    if (!item || !window.confirm(`Delete ${item.title}? This creates a sync tombstone.`)) return;
+    setBusy(true);
+    try {
+      const response = await send({ type: "DELETE_IDENTITY", itemId: item.id, confirmed: true });
+      if (response.ok) onSaved();
+      else setError(response.error === "PERSISTENCE_FAILED" ? "Encrypted vault could not be saved. Previous data is intact." : "Identity could not be deleted.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  const textareaClass = "min-h-20 w-full resize-y border border-line bg-field px-3 py-2 text-sm text-foreground outline-none focus:border-brass focus:ring-2 focus:ring-brass/20";
+  return (
+    <form className="space-y-4 px-5 py-5" onSubmit={(event) => { event.preventDefault(); void save(); }}>
+      <div><p className="text-[10px] font-bold uppercase tracking-[0.2em] text-brass">Identity record</p><h2 className="mt-1 font-display text-3xl">{item ? "Edit identity" : "Add identity"}</h2></div>
+      <FieldLabel label="Title"><Input autoFocus value={fields.title} onChange={update("title")} /></FieldLabel>
+      <div className="grid grid-cols-2 gap-3"><FieldLabel label="First name"><Input value={fields.firstName} onChange={update("firstName")} /></FieldLabel><FieldLabel label="Last name"><Input value={fields.lastName} onChange={update("lastName")} /></FieldLabel></div>
+      <FieldLabel label="Middle name"><Input value={fields.middleName} onChange={update("middleName")} /></FieldLabel>
+      <FieldLabel label="Email"><Input type="email" value={fields.email} onChange={update("email")} /></FieldLabel>
+      <FieldLabel label="Phone"><Input type="tel" value={fields.phone} onChange={update("phone")} /></FieldLabel>
+      <FieldLabel label="Company"><Input value={fields.company} onChange={update("company")} /></FieldLabel>
+      <FieldLabel label="Address line 1"><Input value={fields.addressLine1} onChange={update("addressLine1")} /></FieldLabel>
+      <FieldLabel label="Address line 2"><Input value={fields.addressLine2} onChange={update("addressLine2")} /></FieldLabel>
+      <div className="grid grid-cols-2 gap-3"><FieldLabel label="City"><Input value={fields.city} onChange={update("city")} /></FieldLabel><FieldLabel label="Region"><Input value={fields.region} onChange={update("region")} /></FieldLabel></div>
+      <div className="grid grid-cols-2 gap-3"><FieldLabel label="Postal code"><Input value={fields.postalCode} onChange={update("postalCode")} /></FieldLabel><FieldLabel label="Country"><Input value={fields.country} onChange={update("country")} /></FieldLabel></div>
+      <FieldLabel label="Notes"><textarea className={textareaClass} value={fields.notes} onChange={update("notes")} /></FieldLabel>
+      <div aria-live="polite" className="min-h-5 text-sm text-danger">{error || duplicateWarning}</div>
+      <div className="flex flex-wrap gap-2">
+        <Button type="submit" disabled={busy}><Save size={15} aria-hidden="true" />Save encrypted</Button>
+        {duplicateWarning ? <Button type="button" variant="outline" disabled={busy} onClick={() => void save(true)}>Save anyway</Button> : null}
+        <Button type="button" variant="ghost" onClick={onCancel}>Cancel</Button>
+        {item ? <Button className="text-danger" type="button" variant="ghost" disabled={busy} onClick={() => void remove()}><Trash2 size={15} aria-hidden="true" />Delete</Button> : null}
+      </div>
+    </form>
+  );
+}
+
+type VaultEditor =
+  | { kind: "login"; item: PublicLogin | null }
+  | { kind: "secureNote"; item: PublicSecureNote | null }
+  | { kind: "creditCard"; item: PublicCreditCard | null }
+  | { kind: "identity"; item: PublicIdentity | null };
+
 function VaultList({ items, onChanged }: { items: PublicVaultItem[]; onChanged: () => void }) {
   const [query, setQuery] = useState("");
-  const [editing, setEditing] = useState<PublicLogin | null | undefined>(undefined);
+  const [editor, setEditor] = useState<VaultEditor | null>(null);
   const deferredQuery = useDeferredValue(query.trim().toLowerCase());
   const searchRef = useRef<HTMLInputElement>(null);
   const filtered = useMemo(
@@ -254,24 +463,48 @@ function VaultList({ items, onChanged }: { items: PublicVaultItem[]; onChanged: 
   }, []);
 
   async function edit(item: PublicVaultItem) {
-    if (item.kind !== "login") return;
-    const response = await send({ type: "GET_LOGIN", itemId: item.id });
-    if (response.ok && "item" in response) setEditing(response.item);
+    if (item.kind === "login") {
+      const response = await send({ type: "GET_LOGIN", itemId: item.id });
+      if (response.ok && "item" in response && response.item.kind === "login") setEditor({ kind: "login", item: response.item });
+    } else if (item.kind === "secureNote") {
+      const response = await send({ type: "GET_SECURE_NOTE", itemId: item.id });
+      if (response.ok && "item" in response && response.item.kind === "secureNote") setEditor({ kind: "secureNote", item: response.item });
+    } else if (item.kind === "creditCard") {
+      const response = await send({ type: "GET_CREDIT_CARD", itemId: item.id });
+      if (response.ok && "item" in response && response.item.kind === "creditCard") setEditor({ kind: "creditCard", item: response.item });
+    } else if (item.kind === "identity") {
+      const response = await send({ type: "GET_IDENTITY", itemId: item.id });
+      if (response.ok && "item" in response && response.item.kind === "identity") setEditor({ kind: "identity", item: response.item });
+    }
   }
 
   async function toggle(item: PublicVaultItem) {
-    if (item.kind !== "login") return;
-    const response = await send({ type: "TOGGLE_LOGIN_FAVORITE", itemId: item.id });
+    if (item.kind !== "login" && item.kind !== "secureNote" && item.kind !== "creditCard" && item.kind !== "identity") return;
+    const response = await send(item.kind === "login"
+      ? { type: "TOGGLE_LOGIN_FAVORITE", itemId: item.id }
+      : item.kind === "secureNote"
+        ? { type: "TOGGLE_SECURE_NOTE_FAVORITE", itemId: item.id }
+        : item.kind === "creditCard"
+          ? { type: "TOGGLE_CREDIT_CARD_FAVORITE", itemId: item.id }
+          : { type: "TOGGLE_IDENTITY_FAVORITE", itemId: item.id });
     if (response.ok) onChanged();
   }
 
-  if (editing !== undefined) return <LoginEditor item={editing} onCancel={() => setEditing(undefined)} onSaved={() => { setEditing(undefined); onChanged(); }} />;
+  if (editor?.kind === "login") return <LoginEditor item={editor.item} onCancel={() => setEditor(null)} onSaved={() => { setEditor(null); onChanged(); }} />;
+  if (editor?.kind === "secureNote") return <SecureNoteEditor item={editor.item} onCancel={() => setEditor(null)} onSaved={() => { setEditor(null); onChanged(); }} />;
+  if (editor?.kind === "creditCard") return <CreditCardEditor item={editor.item} onCancel={() => setEditor(null)} onSaved={() => { setEditor(null); onChanged(); }} />;
+  if (editor?.kind === "identity") return <IdentityEditor item={editor.item} onCancel={() => setEditor(null)} onSaved={() => { setEditor(null); onChanged(); }} />;
 
   return (
     <section aria-label="Vault items">
-      <div className="flex gap-2 border-b border-line px-4 py-4">
-        <SearchInput ref={searchRef} value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search logins…" />
-        <Button size="icon" aria-label="Add login" onClick={() => setEditing(null)}><Plus size={17} aria-hidden="true" /></Button>
+      <div className="space-y-2 border-b border-line px-4 py-4">
+        <SearchInput ref={searchRef} value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search vault…" />
+        <div className="grid grid-cols-4 gap-2">
+          <Button size="compact" aria-label="Add login" onClick={() => setEditor({ kind: "login", item: null })}><Plus size={15} aria-hidden="true" />Login</Button>
+          <Button size="compact" variant="outline" aria-label="Add secure note" onClick={() => setEditor({ kind: "secureNote", item: null })}><Plus size={15} aria-hidden="true" />Note</Button>
+          <Button size="compact" variant="outline" aria-label="Add credit card" onClick={() => setEditor({ kind: "creditCard", item: null })}><Plus size={15} aria-hidden="true" />Card</Button>
+          <Button size="compact" variant="outline" aria-label="Add identity" onClick={() => setEditor({ kind: "identity", item: null })}><Plus size={15} aria-hidden="true" />ID</Button>
+        </div>
       </div>
       {filtered.length ? (
         <ul className="divide-y divide-line">
@@ -285,7 +518,7 @@ function VaultList({ items, onChanged }: { items: PublicVaultItem[]; onChanged: 
                     <span className="mt-0.5 block truncate text-xs text-muted-foreground">{item.subtitle}</span>
                   </span>
                 </button>
-                {item.kind === "login" ? (
+                {item.kind === "login" || item.kind === "secureNote" || item.kind === "creditCard" || item.kind === "identity" ? (
                   <button type="button" onClick={() => void toggle(item)} aria-label={item.favorite ? `Remove ${item.title} from favorites` : `Add ${item.title} to favorites`} className="grid h-12 w-12 place-items-center text-muted-foreground outline-none hover:text-foreground focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring">
                     <Heart size={16} fill={item.favorite ? "currentColor" : "none"} aria-hidden="true" />
                   </button>
@@ -299,9 +532,9 @@ function VaultList({ items, onChanged }: { items: PublicVaultItem[]; onChanged: 
           <KeyRound className="mx-auto text-brass" size={28} strokeWidth={1.5} aria-hidden="true" />
           <h2 className="mt-4 font-display text-2xl">Nothing in this drawer.</h2>
           <p className="mx-auto mt-2 max-w-[250px] text-sm leading-6 text-muted-foreground">
-            {items.length ? "No login matches this search." : "Add the first login to this encrypted vault."}
+            {items.length ? "No vault item matches this search." : "Add the first login, secure note, payment card, or identity to this encrypted vault."}
           </p>
-          {!items.length ? <Button className="mt-5" size="compact" onClick={() => setEditing(null)}><Plus size={15} aria-hidden="true" />Add first login</Button> : null}
+          {!items.length ? <div className="mt-5 flex flex-wrap justify-center gap-2"><Button size="compact" onClick={() => setEditor({ kind: "login", item: null })}><Plus size={15} aria-hidden="true" />Login</Button><Button size="compact" variant="outline" onClick={() => setEditor({ kind: "secureNote", item: null })}><Plus size={15} aria-hidden="true" />Note</Button><Button size="compact" variant="outline" onClick={() => setEditor({ kind: "creditCard", item: null })}><Plus size={15} aria-hidden="true" />Card</Button><Button size="compact" variant="outline" onClick={() => setEditor({ kind: "identity", item: null })}><Plus size={15} aria-hidden="true" />Identity</Button></div> : null}
         </div>
       )}
     </section>

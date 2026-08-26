@@ -6,6 +6,32 @@ stable release.
 
 ## Current implementation
 
+### Completed in 0.9.0
+
+- Android, Chromium, and Firefox now provide complete encrypted create, view,
+  edit, favorite, and tombstone-delete flows for secure notes, payment cards,
+  and identities alongside existing login CRUD.
+- Secure notes require a title and non-empty private body. Same-title notes
+  produce an explicit duplicate warning without exposing note content in list
+  summaries.
+- Payment cards normalize separators from 12–19 digit card numbers, validate
+  expiry, CVV/CVC, and optional PIN bounds, mask sensitive fields in editors,
+  and show only the last four digits in vault lists. Duplicate detection uses
+  the normalized full number only inside unlocked memory.
+- Identities support names, email, phone, company, postal address, country, and
+  notes. They require a title plus at least one identity field and warn for a
+  matching email or matching titled name.
+- Search spans every supported item type only while the vault is unlocked.
+  Favorites sort first, and each item type has an accessible local editor and
+  explicit destructive-delete confirmation.
+- Every mutation preserves item identity and creation time, increments item and
+  vault revisions, updates the writer device and timestamp, writes a fresh
+  encrypted payload nonce, and commits session state only after durable storage.
+- Focused Kotlin and TypeScript tests cover validation, duplicate detection,
+  create/edit/favorite/delete behavior, metadata preservation, and tombstones.
+- Android version metadata is `0.9.0` / version code 10; Chromium and Firefox
+  manifests report `0.9.0`.
+
 ### Completed in 0.8.0
 
 - Android settings can create an encrypted `.ikv` snapshot through Android's
@@ -211,8 +237,7 @@ stable release.
 - Android and browser capture plus generated-password suggestions are
   implemented for scoped ordinary forms, but broader hostile-site, framework,
   and lifecycle coverage remains a release gate.
-- CRUD is implemented only for login items. Secure notes, cards, identities,
-  categories, and tags do not yet have complete CRUD UI.
+- Categories and tags do not yet have complete CRUD UI.
 - Browser encrypted backups, CSV import/export, onboarding, conflict UI,
   master-password change, and vault deletion are not implemented.
 
@@ -250,7 +275,8 @@ not be represented as production-ready.
 
 ### Items and organization
 
-- Full create/read/update/delete for login, secure note, credit card, identity.
+- Full create/read/update/delete for login, secure note, credit card, and
+  identity. Completed on Android, Chromium, and Firefox in `0.9.0`.
 - Categories, tags, favorites, keyboard-accessible full-text search, and filters.
 - Search indexes only in unlocked memory; no plaintext persistent index.
 - Password generator controls for length, character classes, ambiguous/repeated
@@ -313,6 +339,8 @@ not be represented as production-ready.
 
 ### Drive sync
 
+- Use optional Google Drive sync to keep the user's single encrypted vault
+  available across their Android and browser-extension devices.
 - Optional sign-in/authorization on Android, Chromium, and Firefox.
 - Treat Google Sign-In as account-like vault discovery: the same Google account
   locates one compact encrypted vault file, while the master password unlocks it
