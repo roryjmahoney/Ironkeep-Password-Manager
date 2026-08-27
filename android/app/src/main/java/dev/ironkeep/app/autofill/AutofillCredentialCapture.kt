@@ -127,17 +127,73 @@ internal object AutofillPendingSaveStore {
     }
 }
 
-internal enum class AutofillFieldKind { USERNAME, CURRENT_PASSWORD, NEW_PASSWORD }
+internal enum class AutofillFieldKind {
+    USERNAME,
+    CURRENT_PASSWORD,
+    NEW_PASSWORD,
+    CREDIT_CARD_NAME,
+    CREDIT_CARD_NUMBER,
+    CREDIT_CARD_SECURITY_CODE,
+    CREDIT_CARD_EXPIRATION_DATE,
+    CREDIT_CARD_EXPIRATION_MONTH,
+    CREDIT_CARD_EXPIRATION_YEAR,
+}
 
 internal fun classifyAutofillField(vararg labels: String?): AutofillFieldKind? {
     val tokens = labels.filterNotNull().map { label -> label.lowercase().filter(Char::isLetterOrDigit) }
     return when {
+        tokens.any { it in CARD_EXPIRATION_MONTH_TOKENS } -> AutofillFieldKind.CREDIT_CARD_EXPIRATION_MONTH
+        tokens.any { it in CARD_EXPIRATION_YEAR_TOKENS } -> AutofillFieldKind.CREDIT_CARD_EXPIRATION_YEAR
+        tokens.any { it in CARD_EXPIRATION_DATE_TOKENS } -> AutofillFieldKind.CREDIT_CARD_EXPIRATION_DATE
+        tokens.any { it in CARD_SECURITY_CODE_TOKENS } -> AutofillFieldKind.CREDIT_CARD_SECURITY_CODE
+        tokens.any { it in CARD_NUMBER_TOKENS } -> AutofillFieldKind.CREDIT_CARD_NUMBER
+        tokens.any { it in CARD_NAME_TOKENS } -> AutofillFieldKind.CREDIT_CARD_NAME
         tokens.any { it.contains("newpassword") || it.contains("passwordnew") } -> AutofillFieldKind.NEW_PASSWORD
         tokens.any { it.contains("password") || it == "pwd" } -> AutofillFieldKind.CURRENT_PASSWORD
         tokens.any { it.contains("username") || it.contains("email") || it.contains("phone") || it.contains("loginid") } -> AutofillFieldKind.USERNAME
         else -> null
     }
 }
+
+private val CARD_NAME_TOKENS = setOf("creditcardname", "ccname", "cardholder", "cardholdername", "nameoncard")
+private val CARD_NUMBER_TOKENS = setOf("creditcardnumber", "ccnumber", "cardnumber", "paymentcardnumber", "pan")
+private val CARD_SECURITY_CODE_TOKENS = setOf(
+    "creditcardsecuritycode",
+    "cardsecuritycode",
+    "cccsc",
+    "securitycode",
+    "cvc",
+    "cvc2",
+    "cvv",
+    "cvv2",
+)
+private val CARD_EXPIRATION_DATE_TOKENS = setOf(
+    "creditcardexpirationdate",
+    "cardexpirationdate",
+    "cardexpirydate",
+    "ccexp",
+    "expirationdate",
+    "expirydate",
+    "expdate",
+)
+private val CARD_EXPIRATION_MONTH_TOKENS = setOf(
+    "creditcardexpirationmonth",
+    "cardexpirationmonth",
+    "cardexpirymonth",
+    "ccexpmonth",
+    "expirationmonth",
+    "expirymonth",
+    "expmonth",
+)
+private val CARD_EXPIRATION_YEAR_TOKENS = setOf(
+    "creditcardexpirationyear",
+    "cardexpirationyear",
+    "cardexpiryyear",
+    "ccexpyear",
+    "expirationyear",
+    "expiryyear",
+    "expyear",
+)
 
 internal fun httpsOrigin(scheme: String?, domain: String?): String? {
     if (!scheme.equals("https", ignoreCase = true) || domain.isNullOrBlank()) return null

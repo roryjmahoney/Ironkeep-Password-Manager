@@ -2,6 +2,8 @@ package dev.ironkeep.app.autofill
 
 import dev.ironkeep.app.vault.model.LoginFields
 import dev.ironkeep.app.vault.model.LoginItem
+import dev.ironkeep.app.vault.model.CreditCardFields
+import dev.ironkeep.app.vault.model.CreditCardItem
 import dev.ironkeep.app.vault.model.VaultMutations
 import dev.ironkeep.app.vault.model.VaultPayload
 import org.junit.Assert.assertEquals
@@ -17,6 +19,29 @@ class AutofillCredentialCaptureTest {
         assertEquals(AutofillFieldKind.CURRENT_PASSWORD, classifyAutofillField("currentPassword"))
         assertEquals(AutofillFieldKind.USERNAME, classifyAutofillField("emailAddress"))
         assertNull(classifyAutofillField("display-name"))
+    }
+
+    @Test
+    fun fieldClassificationRecognizesAndroidAndHtmlCreditCardHints() {
+        assertEquals(AutofillFieldKind.CREDIT_CARD_NAME, classifyAutofillField("cc-name"))
+        assertEquals(AutofillFieldKind.CREDIT_CARD_NUMBER, classifyAutofillField("creditCardNumber"))
+        assertEquals(AutofillFieldKind.CREDIT_CARD_SECURITY_CODE, classifyAutofillField("cvv"))
+        assertEquals(AutofillFieldKind.CREDIT_CARD_EXPIRATION_DATE, classifyAutofillField("cc-exp"))
+        assertEquals(AutofillFieldKind.CREDIT_CARD_EXPIRATION_MONTH, classifyAutofillField("cc-exp-month"))
+        assertEquals(AutofillFieldKind.CREDIT_CARD_EXPIRATION_YEAR, classifyAutofillField("creditCardExpirationYear"))
+        assertNull(classifyAutofillField("account-number"))
+    }
+
+    @Test
+    fun creditCardValuesMatchTextLengthsAndSelectOptions() {
+        val card = creditCard()
+
+        assertEquals("4111111111111111", creditCardAutofillText(AutofillFieldKind.CREDIT_CARD_NUMBER, card))
+        assertEquals("07/30", creditCardAutofillText(AutofillFieldKind.CREDIT_CARD_EXPIRATION_DATE, card, maxLength = 5))
+        assertEquals("07/2030", creditCardAutofillText(AutofillFieldKind.CREDIT_CARD_EXPIRATION_DATE, card))
+        assertEquals("30", creditCardAutofillText(AutofillFieldKind.CREDIT_CARD_EXPIRATION_YEAR, card, maxLength = 2))
+        assertEquals(2, creditCardAutofillListIndex(AutofillFieldKind.CREDIT_CARD_EXPIRATION_MONTH, card, listOf("Month", "06", "07", "08")))
+        assertEquals(1, creditCardAutofillListIndex(AutofillFieldKind.CREDIT_CARD_EXPIRATION_YEAR, card, listOf("Year", "2030", "2031")))
     }
 
     @Test
@@ -85,4 +110,11 @@ class AutofillCredentialCaptureTest {
     private fun vaultWith(vararg fields: LoginFields): VaultPayload = fields.foldIndexed(VaultPayload.empty("Test", "device-a")) { index, payload, login ->
         VaultMutations.addLogin(payload, login, "device-a", itemId = "login-$index")
     }
+
+    private fun creditCard(): CreditCardItem = VaultMutations.addCreditCard(
+        VaultPayload.empty("Test", "device-a"),
+        CreditCardFields("Test card", "A Person", "4111 1111 1111 1111", 7, 2030, "123", null, ""),
+        "device-a",
+        itemId = "card-one",
+    ).items.single() as CreditCardItem
 }

@@ -42,7 +42,7 @@ class AutofillAuthActivity : FragmentActivity() {
         super.onCreate(savedInstanceState)
         val structure = assistStructure() ?: return finishCancelled()
         fields = FieldCollector().collect(listOf(structure))
-        if (fields.packageName == packageName || fields.savePasswordIds.isEmpty() || fields.target() == null) {
+        if (fields.packageName == packageName || !fields.hasSupportedFields || fields.target() == null) {
             fields.clearSensitive()
             return finishCancelled()
         }

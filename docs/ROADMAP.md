@@ -6,6 +6,28 @@ stable release.
 
 ## Current implementation
 
+### Completed in 0.9.2
+
+- Android Autofill now recognizes official Android and common HTML payment-card
+  hints for cardholder name, card number, security code, combined expiry, and
+  separate expiry month and year fields.
+- Stored cards are offered on visible, enabled fields belonging to a verified
+  native package or exact HTTPS web origin. Dataset labels expose only the card
+  title and last four digits; full values remain inside Android's Autofill
+  response and Ironkeep never submits the form.
+- Text, list, and date expiry controls are supported, including two-digit year
+  and `MM/YY` formatting when a field's declared length requires it.
+- Locked card forms expose only **Unlock Ironkeep** and retain the existing
+  authentication-per-use biometric boundary. A successful authentication
+  returns card datasets without relaxing the 15-second background lock.
+- Card-only forms no longer depend on password save metadata. This release fills
+  existing cards; capture of a newly typed card remains outside this slice and
+  no card is stored without explicit confirmation.
+- Focused Kotlin tests cover Android/HTML card-hint recognition, false-positive
+  rejection, expiry formatting, and list-option selection.
+- Android version metadata is `0.9.2` / version code 12; Chromium and Firefox
+  manifests report `0.9.2` with no browser runtime change.
+
 ### Completed in 0.9.1
 
 - Android, Chromium, and Firefox expose the complete Privacy Notice and Terms
