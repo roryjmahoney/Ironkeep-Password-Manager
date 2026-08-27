@@ -2,6 +2,7 @@ package dev.ironkeep.app.ui
 
 import android.content.Context
 import android.content.ContextWrapper
+import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedContent
@@ -17,6 +18,7 @@ import androidx.compose.foundation.selection.selectable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
@@ -27,10 +29,12 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.focusable
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.outlined.ArrowBack
 import androidx.compose.material.icons.outlined.Add
 import androidx.compose.material.icons.outlined.Fingerprint
 import androidx.compose.material.icons.outlined.Favorite
@@ -70,6 +74,8 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.RectangleShape
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.semantics.heading
@@ -105,6 +111,7 @@ fun IronkeepApp(viewModel: VaultViewModel) {
     val state by viewModel.state.collectAsStateWithLifecycle()
     val backupState by viewModel.backupState.collectAsStateWithLifecycle()
     val activity = LocalContext.current.findFragmentActivity()
+    var legalDocument by remember { mutableStateOf<LegalDocument?>(null) }
     val createBackup = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("application/vnd.ironkeep.vault")) { uri ->
         if (uri != null) viewModel.exportSnapshot(uri)
     }
@@ -150,20 +157,31 @@ fun IronkeepApp(viewModel: VaultViewModel) {
     LaunchedEffect(viewModel, biometricPrompt) {
         viewModel.biometricCancelRequests.collect { biometricPrompt.cancelAuthentication() }
     }
-    AnimatedContent(
-        targetState = state,
-        transitionSpec = { fadeIn(spring(stiffness = 600f)) togetherWith fadeOut() },
-        label = "vault state",
-    ) { current ->
-        when (current) {
+    if (legalDocument != null) {
+        LegalDocumentScreen(document = requireNotNull(legalDocument), onBack = { legalDocument = null })
+    } else {
+        AnimatedContent(
+            targetState = state,
+            transitionSpec = { fadeIn(spring(stiffness = 600f)) togetherWith fadeOut() },
+            label = "vault state",
+        ) { current ->
+            when (current) {
             VaultUiState.Loading -> LoadingScreen()
-            VaultUiState.Setup -> GateScreen(creating = true, error = null, onSubmit = viewModel::create)
+            VaultUiState.Setup -> GateScreen(
+                creating = true,
+                error = null,
+                onSubmit = viewModel::create,
+                onPrivacy = { legalDocument = LegalDocument.PRIVACY },
+                onTerms = { legalDocument = LegalDocument.TERMS },
+            )
             is VaultUiState.Locked -> GateScreen(
                 creating = false,
                 error = current.message,
                 biometricEnrolled = current.biometricEnrolled,
                 onSubmit = viewModel::unlock,
                 onBiometricUnlock = viewModel::requestBiometricUnlock,
+                onPrivacy = { legalDocument = LegalDocument.PRIVACY },
+                onTerms = { legalDocument = LegalDocument.TERMS },
             )
             is VaultUiState.Error -> GateScreen(
                 creating = current.creating,
@@ -171,6 +189,8 @@ fun IronkeepApp(viewModel: VaultViewModel) {
                 biometricEnrolled = current.biometricEnrolled,
                 onSubmit = if (current.creating) viewModel::create else viewModel::unlock,
                 onBiometricUnlock = viewModel::requestBiometricUnlock,
+                onPrivacy = { legalDocument = LegalDocument.PRIVACY },
+                onTerms = { legalDocument = LegalDocument.TERMS },
             )
             is VaultUiState.Unlocked -> VaultHome(
                 vault = current.vault,
@@ -204,8 +224,11 @@ fun IronkeepApp(viewModel: VaultViewModel) {
                 onCancelRestore = viewModel::cancelRestore,
                 onCopyPassword = viewModel::copyPassword,
                 onLock = viewModel::lock,
+                onPrivacy = { legalDocument = LegalDocument.PRIVACY },
+                onTerms = { legalDocument = LegalDocument.TERMS },
             )
         }
+    }
     }
 }
 
@@ -221,6 +244,8 @@ private fun GateScreen(
     biometricEnrolled: Boolean = false,
     onSubmit: (CharArray) -> Unit,
     onBiometricUnlock: () -> Unit = {},
+    onPrivacy: () -> Unit,
+    onTerms: () -> Unit,
 ) {
     var password by remember(creating) { mutableStateOf("") }
     var confirmation by remember(creating) { mutableStateOf("") }
@@ -237,10 +262,10 @@ private fun GateScreen(
 
     Scaffold(containerColor = MaterialTheme.colorScheme.background) { insets ->
         Column(
-            Modifier.fillMaxSize().padding(insets).padding(horizontal = 24.dp, vertical = 20.dp),
-            verticalArrangement = Arrangement.SpaceBetween,
+            Modifier.fillMaxSize().padding(insets).verticalScroll(rememberScrollState()).padding(horizontal = 24.dp, vertical = 20.dp),
         ) {
             Wordmark()
+            Spacer(Modifier.height(40.dp))
             Column(Modifier.fillMaxWidth().border(BorderStroke(1.dp, MaterialTheme.colorScheme.outline)).padding(20.dp)) {
                 Text(if (creating) "ZERO KNOWLEDGE" else "LOCAL DECRYPTION", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.primary)
                 Spacer(Modifier.height(12.dp))
@@ -303,7 +328,17 @@ private fun GateScreen(
                     )
                 }
             }
-            Text("Offline by default · AES-256-GCM · Argon2id", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            LegalLinks(
+                onPrivacy = onPrivacy,
+                onTerms = onTerms,
+                modifier = Modifier.padding(top = 28.dp),
+            )
+            Text(
+                "Offline by default · AES-256-GCM · Argon2id",
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.padding(top = 20.dp, bottom = 8.dp),
+            )
         }
     }
 }
@@ -317,6 +352,95 @@ private fun Wordmark() = Row(verticalAlignment = Alignment.CenterVertically) {
     Column {
         Text("Ironkeep", style = MaterialTheme.typography.titleLarge)
         Text("PRIVATE VAULT", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+    }
+}
+
+@Composable
+private fun LegalLinks(
+    onPrivacy: () -> Unit,
+    onTerms: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    Column(modifier.fillMaxWidth()) {
+        Text("LEGAL", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.primary)
+        Text(
+            "By using Ironkeep, you agree to the Terms of Use and acknowledge the Privacy Notice.",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.padding(top = 6.dp),
+        )
+        Row(
+            Modifier.fillMaxWidth().padding(top = 12.dp),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            OutlinedButton(onClick = onPrivacy, shape = RectangleShape, modifier = Modifier.weight(1f).height(48.dp)) {
+                Text("Privacy notice")
+            }
+            OutlinedButton(onClick = onTerms, shape = RectangleShape, modifier = Modifier.weight(1f).height(48.dp)) {
+                Text("Terms of use")
+            }
+        }
+    }
+}
+
+@Composable
+private fun LegalDocumentScreen(document: LegalDocument, onBack: () -> Unit) {
+    BackHandler(onBack = onBack)
+    val context = LocalContext.current
+    val blocks = remember(document) {
+        val source = context.assets.open(document.assetName).bufferedReader().use { it.readText() }
+        parseLegalMarkdown(source)
+    }
+    val headingFocus = remember { FocusRequester() }
+    LaunchedEffect(document) { headingFocus.requestFocus() }
+
+    Scaffold(containerColor = MaterialTheme.colorScheme.background) { insets ->
+        Column(Modifier.fillMaxSize().padding(insets)) {
+            Row(
+                Modifier.fillMaxWidth().height(72.dp).padding(horizontal = 8.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                IconButton(onClick = onBack, modifier = Modifier.size(48.dp)) {
+                    Icon(Icons.AutoMirrored.Outlined.ArrowBack, contentDescription = "Back")
+                }
+                Text(
+                    document.title,
+                    style = MaterialTheme.typography.headlineSmall,
+                    modifier = Modifier.padding(start = 8.dp).semantics { heading() }.focusRequester(headingFocus).focusable(),
+                )
+            }
+            HorizontalDivider(color = MaterialTheme.colorScheme.outline)
+            LazyColumn(
+                modifier = Modifier.fillMaxSize(),
+                contentPadding = PaddingValues(horizontal = 20.dp, vertical = 24.dp),
+                verticalArrangement = Arrangement.spacedBy(12.dp),
+            ) {
+                items(blocks) { block ->
+                    when (block.kind) {
+                        LegalBlockKind.HEADING -> Text(
+                            block.text,
+                            style = MaterialTheme.typography.titleLarge,
+                            color = MaterialTheme.colorScheme.onSurface,
+                            modifier = Modifier.padding(top = 12.dp).semantics { heading() },
+                        )
+                        LegalBlockKind.PARAGRAPH -> Text(
+                            block.text,
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                        LegalBlockKind.BULLET -> Row(Modifier.fillMaxWidth()) {
+                            Text("•", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.primary)
+                            Text(
+                                block.text,
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                modifier = Modifier.padding(start = 10.dp).weight(1f),
+                            )
+                        }
+                    }
+                }
+            }
+        }
     }
 }
 
@@ -355,6 +479,8 @@ private fun VaultHome(
     onCancelRestore: () -> Unit,
     onCopyPassword: (String) -> Unit,
     onLock: () -> Unit,
+    onPrivacy: () -> Unit,
+    onTerms: () -> Unit,
 ) {
     var query by remember { mutableStateOf("") }
     var editingId by remember { mutableStateOf<String?>(null) }
@@ -666,6 +792,12 @@ private fun VaultHome(
                             OutlinedButton(onClick = onChooseRestore, shape = RectangleShape, modifier = Modifier.height(48.dp)) { Text("Restore") }
                         }
                     }
+                    HorizontalDivider(color = MaterialTheme.colorScheme.outline)
+                    LegalLinks(
+                        onPrivacy = onPrivacy,
+                        onTerms = onTerms,
+                        modifier = Modifier.padding(horizontal = 20.dp, vertical = 20.dp),
+                    )
                     HorizontalDivider(color = MaterialTheme.colorScheme.outline)
                 }
             }

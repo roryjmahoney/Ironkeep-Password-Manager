@@ -11,7 +11,7 @@
     "extensions/firefox"
   ],
   "scripts": {
-    "build": "npm run build --workspaces --if-present && node scripts/verify-extension-content-scripts.mjs",
+    "build": "node scripts/verify-legal-documents.mjs && npm run build --workspaces --if-present && node scripts/verify-extension-content-scripts.mjs",
     "test": "npm run test --workspaces --if-present",
     "typecheck": "npm run typecheck --workspaces --if-present",
     "lint": "npm run lint --workspaces --if-present"

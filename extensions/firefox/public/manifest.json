@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Ironkeep",
-  "version": "0.9.0",
+  "version": "0.9.1",
   "description": "Offline-first, zero-knowledge password manager.",
   "icons": {
     "16": "icons/ironkeep-16.png",

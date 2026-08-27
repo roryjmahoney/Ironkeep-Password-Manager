@@ -46,6 +46,9 @@ Ironkeep/
 - [Product scope](docs/ROADMAP.md)
 - [Windows 10 build guide](docs/WINDOWS_BUILD.md)
 - [Interface and 21st.dev integration](docs/DESIGN.md)
+- [Privacy notice](docs/PRIVACY.md)
+- [Terms of use](docs/TERMS.md)
+- [Contributing](CONTRIBUTING.md)
 
 ## Verify the scaffold
 

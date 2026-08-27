@@ -6,6 +6,22 @@ stable release.
 
 ## Current implementation
 
+### Completed in 0.9.1
+
+- Android, Chromium, and Firefox expose the complete Privacy Notice and Terms
+  of Use before vault creation or unlock and from each platform's settings UI.
+- Legal text is bundled for offline access. The browser extensions consume the
+  canonical Markdown directly, while an automated gate requires Android's
+  packaged copies to match it exactly.
+- Long-form legal screens use a single scroll surface, readable reflow,
+  accessible headings, explicit back controls, and keyboard focus restoration
+  in the extensions.
+- The repository now includes contribution guidelines covering private security
+  reports, local verification, security invariants, prohibited artifacts, and
+  AGPL-3.0-only contribution licensing.
+- Android version metadata is `0.9.1` / version code 11; Chromium and Firefox
+  manifests report `0.9.1`.
+
 ### Completed in 0.9.0
 
 - Android, Chromium, and Firefox now provide complete encrypted create, view,

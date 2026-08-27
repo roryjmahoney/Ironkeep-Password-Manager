@@ -1,5 +1,6 @@
 import { generatePassword } from "@ironkeep/shared";
 import {
+  ArrowLeft,
   Copy,
   CreditCard,
   FileText,
@@ -22,6 +23,7 @@ import { Input } from "./components/ui/Input.js";
 import { PasswordInput } from "./components/ui/PasswordInput.js";
 import { SearchInput } from "./components/ui/SearchInput.js";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "./components/ui/Tabs.js";
+import { LEGAL_DOCUMENTS, parseLegalMarkdown, type LegalDocumentKind } from "./legal.js";
 import type { ExtensionRequest, ExtensionResponse, PublicCreditCard, PublicIdentity, PublicLogin, PublicSecureNote, PublicSecuritySettings, PublicVaultItem } from "./runtime/types.js";
 
 type ViewState = "loading" | "empty" | "locked" | "unlocked";
@@ -52,6 +54,69 @@ function BrandMark() {
   );
 }
 
+function LegalLinks({ idPrefix, onOpen }: { idPrefix: string; onOpen: (kind: LegalDocumentKind, triggerId: string) => void }) {
+  return (
+    <section className="border-y border-line py-5" aria-labelledby={`${idPrefix}-legal-title`}>
+      <p className="text-[10px] font-bold uppercase tracking-[0.2em] text-brass">Legal</p>
+      <h2 id={`${idPrefix}-legal-title`} className="mt-2 text-sm font-semibold text-foreground">Your rights and privacy</h2>
+      <p className="mt-2 text-xs leading-5 text-muted-foreground">
+        By using Ironkeep, you agree to the Terms of Use and acknowledge the Privacy Notice.
+      </p>
+      <div className="mt-4 grid grid-cols-2 gap-2">
+        <Button id={`${idPrefix}-privacy`} className="min-h-11" type="button" variant="outline" onClick={() => onOpen("privacy", `${idPrefix}-privacy`)}>
+          Privacy notice
+        </Button>
+        <Button id={`${idPrefix}-terms`} className="min-h-11" type="button" variant="outline" onClick={() => onOpen("terms", `${idPrefix}-terms`)}>
+          Terms of use
+        </Button>
+      </div>
+    </section>
+  );
+}
+
+function LegalDocumentView({ kind, onBack }: { kind: LegalDocumentKind; onBack: () => void }) {
+  const legalDocument = LEGAL_DOCUMENTS[kind];
+  const blocks = useMemo(() => parseLegalMarkdown(legalDocument.source), [legalDocument.source]);
+  const headingRef = useRef<HTMLHeadingElement>(null);
+
+  useEffect(() => {
+    headingRef.current?.focus();
+  }, [kind]);
+
+  return (
+    <main className="h-[580px] overflow-y-auto bg-background text-foreground" aria-labelledby="legal-document-title">
+      <header className="sticky top-0 z-10 flex min-h-16 items-center gap-2 border-b border-line bg-background px-3">
+        <Button variant="ghost" size="icon" aria-label="Back" onClick={onBack}>
+          <ArrowLeft size={18} aria-hidden="true" />
+        </Button>
+        <div className="min-w-0">
+          <p className="text-[9px] font-bold uppercase tracking-[0.2em] text-brass">Ironkeep legal</p>
+          <h1 id="legal-document-title" ref={headingRef} tabIndex={-1} className="truncate font-display text-2xl outline-none focus-visible:ring-2 focus-visible:ring-ring">
+            {legalDocument.title}
+          </h1>
+        </div>
+      </header>
+      <div className="space-y-4 px-5 py-6">
+        {blocks.map((block, index) => {
+          if (block.kind === "heading") {
+            return <h2 key={`${block.kind}-${index}`} className="pt-3 font-display text-2xl leading-tight text-foreground">{block.text}</h2>;
+          }
+          if (block.kind === "bullet") {
+            return (
+              <div key={`${block.kind}-${index}`} className="grid grid-cols-[12px_1fr] gap-2 text-sm leading-6 text-muted-foreground">
+                <span className="text-brass" aria-hidden="true">•</span>
+                <p>{block.text}</p>
+              </div>
+            );
+          }
+          return <p key={`${block.kind}-${index}`} className="text-sm leading-6 text-muted-foreground">{block.text}</p>;
+        })}
+        <p className="border-t border-line pt-5 text-xs leading-5 text-muted-foreground">Bundled from the canonical project notice.</p>
+      </div>
+    </main>
+  );
+}
+
 function LoadingView() {
   return (
     <main className="grid min-h-[580px] place-items-center bg-background text-foreground" aria-label="Opening Ironkeep">
@@ -61,7 +126,7 @@ function LoadingView() {
   );
 }
 
-function GateView({ mode, onOpen }: { mode: "empty" | "locked"; onOpen: () => void }) {
+function GateView({ mode, onOpen, onLegal }: { mode: "empty" | "locked"; onOpen: () => void; onLegal: (kind: LegalDocumentKind, triggerId: string) => void }) {
   const [creating, setCreating] = useState(mode === "empty");
   const [masterPassword, setMasterPassword] = useState("");
   const [confirmation, setConfirmation] = useState("");
@@ -129,6 +194,9 @@ function GateView({ mode, onOpen }: { mode: "empty" | "locked"; onOpen: () => vo
           <p className="text-center text-xs text-muted-foreground">Biometric unlock is available in the Android app.</p>
         ) : null}
       </form>
+      <div className="mt-8">
+        <LegalLinks idPrefix="gate" onOpen={onLegal} />
+      </div>
     </main>
   );
 }
@@ -598,7 +666,7 @@ function Generator({ onLock }: { onLock: () => void }) {
   );
 }
 
-function SettingsPanel({ onLock }: { onLock: () => void }) {
+function SettingsPanel({ onLock, onLegal }: { onLock: () => void; onLegal: (kind: LegalDocumentKind, triggerId: string) => void }) {
   const [settings, setSettings] = useState<PublicSecuritySettings | null>(null);
   const [autoLockMinutes, setAutoLockMinutes] = useState(5);
   const [clearClipboardSeconds, setClearClipboardSeconds] = useState(30);
@@ -679,11 +747,14 @@ function SettingsPanel({ onLock }: { onLock: () => void }) {
         <span className="text-sm text-muted-foreground">Not connected</span>
       </div>
       <Button className="mt-4 w-full" variant="outline"><ShieldCheck size={16} aria-hidden="true" />Connect Google Drive</Button>
+      <div className="mt-6">
+        <LegalLinks idPrefix="settings" onOpen={onLegal} />
+      </div>
     </section>
   );
 }
 
-function UnlockedView({ onLock }: { onLock: () => void }) {
+function UnlockedView({ onLock, onLegal }: { onLock: () => void; onLegal: (kind: LegalDocumentKind, triggerId: string) => void }) {
   const [items, setItems] = useState<PublicVaultItem[]>([]);
   const [refreshKey, setRefreshKey] = useState(0);
   useEffect(() => {
@@ -736,7 +807,7 @@ function UnlockedView({ onLock }: { onLock: () => void }) {
         </TabsList>
         <TabsContent value="vault"><SiteMatches refreshKey={refreshKey} /><VaultList items={items} onChanged={() => setRefreshKey((value) => value + 1)} /></TabsContent>
         <TabsContent value="generator"><Generator onLock={onLock} /></TabsContent>
-        <TabsContent value="settings"><SettingsPanel onLock={onLock} /></TabsContent>
+        <TabsContent value="settings"><SettingsPanel onLock={onLock} onLegal={onLegal} /></TabsContent>
       </Tabs>
     </main>
   );
@@ -744,13 +815,27 @@ function UnlockedView({ onLock }: { onLock: () => void }) {
 
 export function App() {
   const [view, setView] = useState<ViewState>("loading");
+  const [legalDocument, setLegalDocument] = useState<LegalDocumentKind | null>(null);
+  const legalTriggerId = useRef<string | null>(null);
   const showLocked = useCallback(() => setView("locked"), []);
+  const openLegal = useCallback((kind: LegalDocumentKind, triggerId: string) => {
+    legalTriggerId.current = triggerId;
+    setLegalDocument(kind);
+  }, []);
+  const closeLegal = useCallback(() => {
+    const triggerId = legalTriggerId.current;
+    setLegalDocument(null);
+    window.requestAnimationFrame(() => {
+      if (triggerId) document.getElementById(triggerId)?.focus();
+    });
+  }, []);
   useEffect(() => {
     void send({ type: "STATUS" }).then((response) => {
       setView(response.ok && "status" in response ? response.status : "locked");
     });
   }, []);
+  if (legalDocument) return <LegalDocumentView kind={legalDocument} onBack={closeLegal} />;
   if (view === "loading") return <LoadingView />;
-  if (view === "empty" || view === "locked") return <GateView mode={view} onOpen={() => setView("unlocked")} />;
-  return <UnlockedView onLock={showLocked} />;
+  if (view === "empty" || view === "locked") return <GateView mode={view} onOpen={() => setView("unlocked")} onLegal={openLegal} />;
+  return <UnlockedView onLock={showLocked} onLegal={openLegal} />;
 }
