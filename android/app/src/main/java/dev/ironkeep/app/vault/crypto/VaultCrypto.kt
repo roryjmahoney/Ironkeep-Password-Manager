@@ -52,6 +52,15 @@ class UnlockedVault internal constructor(
         this.payload = payload
     }
 
+    internal fun commitMasterPasswordChange(file: VaultFile) {
+        requireOpen()
+        require(
+            file.vaultId == payload.vaultId && file.revision == payload.revision &&
+                file.updatedAt == payload.updatedAt && file.writerDeviceId == payload.writerDeviceId,
+        ) { "Password-change vault metadata does not match" }
+        this.file = file
+    }
+
     override fun close() {
         if (closed) return
         dataKey.fill(0)
@@ -200,6 +209,69 @@ class VaultCrypto(
         } finally {
             plaintext?.fill(0)
             payloadNonce.fill(0)
+        }
+    }
+
+    fun changeMasterPassword(
+        session: UnlockedVault,
+        currentMasterPassword: CharArray,
+        newMasterPassword: CharArray,
+        profile: KdfProfile = KdfProfile(),
+    ): VaultFile {
+        session.requireOpen()
+        validateKdf(profile.memoryKiB, profile.iterations, profile.parallelism)
+        require(newMasterPassword.size >= 12) { "Master password must be at least 12 characters" }
+        val salt = randomBytes(SALT_BYTES)
+        val wrapNonce = randomBytes(NONCE_BYTES)
+        val payloadNonce = randomBytes(NONCE_BYTES)
+        val kdf = KdfParameters(
+            salt = encode(salt),
+            memoryKiB = profile.memoryKiB,
+            iterations = profile.iterations,
+            parallelism = profile.parallelism,
+        )
+        val partial = VaultFileHeader(session.payload, kdf)
+        var currentKek: ByteArray? = null
+        var verifiedDataKey: ByteArray? = null
+        var newKek: ByteArray? = null
+        var plaintext: ByteArray? = null
+        try {
+            currentKek = derive(currentMasterPassword, session.file.kdf)
+            verifiedDataKey = aesGcmDecrypt(
+                currentKek,
+                decode(session.file.keyWrap.ciphertext),
+                decode(session.file.keyWrap.nonce),
+                keyWrapAad(session.file.header()),
+            )
+            if (!verifiedDataKey.contentEquals(session.dataKey)) throw VaultAuthenticationException()
+
+            newKek = derive(newMasterPassword, kdf)
+            val keyWrap = EncryptedBlob(
+                nonce = encode(wrapNonce),
+                ciphertext = encode(aesGcmEncrypt(newKek, session.dataKey, wrapNonce, keyWrapAad(partial))),
+            )
+            plaintext = json.encodeToString(VaultPayload.serializer(), session.payload).encodeToByteArray()
+            val payloadBlob = EncryptedBlob(
+                nonce = encode(payloadNonce),
+                ciphertext = encode(aesGcmEncrypt(session.dataKey, plaintext, payloadNonce, payloadAad(partial, keyWrap))),
+            )
+            return partial.toVaultFile(keyWrap, payloadBlob)
+        } catch (error: VaultFormatException) {
+            throw error
+        } catch (error: IllegalArgumentException) {
+            throw error
+        } catch (_: Exception) {
+            throw VaultAuthenticationException()
+        } finally {
+            currentKek?.fill(0)
+            verifiedDataKey?.fill(0)
+            newKek?.fill(0)
+            plaintext?.fill(0)
+            salt.fill(0)
+            wrapNonce.fill(0)
+            payloadNonce.fill(0)
+            currentMasterPassword.fill('\u0000')
+            newMasterPassword.fill('\u0000')
         }
     }
 

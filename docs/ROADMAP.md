@@ -6,6 +6,60 @@ stable release.
 
 ## Current implementation
 
+### Completed in 0.11.0
+
+- Android, Chromium, and Firefox now provide category and tag create, rename,
+  delete, assignment, and filtering controls for every vault item type.
+- Deleting a category or tag removes affected assignments without deleting the
+  item. Organization changes increment item and vault revisions and persist only
+  inside the encrypted payload.
+- Search and filters derive from unlocked in-memory state. No plaintext search
+  or organization index is persisted.
+- Android version metadata is `0.11.0` / version code 18; Chromium and Firefox
+  manifests and workspace packages report `0.11.0`.
+
+### Completed in 0.10.0
+
+- Android, Chromium, and Firefox export Ironkeep CSV and import Ironkeep or
+  common browser login CSV through bounded local parsers.
+- Import shows total, valid, likely-duplicate, and invalid row counts before
+  mutation. Users can skip likely duplicates or explicitly import every valid
+  row; accepted rows commit to the encrypted vault in one durable write.
+- CSV export requires current-master-password reauthentication and is explicitly
+  labeled plaintext. File size, row count, and field length limits reject
+  oversized input before mutation.
+
+### Completed in 0.9.6
+
+- Android, Chromium, and Firefox can permanently delete the local vault only
+  after current-master-password authentication and an exact `DELETE`
+  confirmation. Local recovery and biometric material are cleared with it.
+
+### Completed in 0.9.5
+
+- Chromium and Firefox can export an encrypted `.ikv` snapshot and restore it
+  after bounded parsing, master-password authentication, checksum preview, and
+  explicit confirmation.
+- Browser restore preserves the previous encrypted vault as a local recovery
+  snapshot and adopts the authenticated replacement only after storage succeeds.
+
+### Completed in 0.9.4
+
+- Android payment-card forms now register native card save metadata, capture
+  complete card candidates only from current Autofill values, and continue into
+  the existing authenticated confirmation screen.
+- Users explicitly choose save as new, update an exact-number match, or not now.
+  Sensitive card values remain memory-only until encrypted persistence.
+
+### Completed in 0.9.3
+
+- Android, Chromium, and Firefox settings can change the master password after
+  verifying the current password. A fresh Argon2id salt, key-wrap nonce, and
+  payload nonce are generated; failed persistence leaves the old password valid.
+- Android resets biometric material after a password change and provides a
+  reopenable setup guide for the system Autofill provider picker, strong
+  biometric enrollment, and optional battery-settings guidance.
+
 ### Completed in 0.9.2
 
 - Android Autofill now recognizes official Android and common HTML payment-card
@@ -275,9 +329,7 @@ stable release.
 - Android and browser capture plus generated-password suggestions are
   implemented for scoped ordinary forms, but broader hostile-site, framework,
   and lifecycle coverage remains a release gate.
-- Categories and tags do not yet have complete CRUD UI.
-- Browser encrypted backups, CSV import/export, onboarding, conflict UI,
-  master-password change, and vault deletion are not implemented.
+- Google Drive conflict UI is not implemented.
 
 This remains a pre-audit build. Placeholder controls and incomplete flows must
 not be represented as production-ready.
@@ -301,7 +353,8 @@ not be represented as production-ready.
 
 ### Vault and session
 
-- Create/unlock/lock/change-master-password/delete-vault flows.
+- Create/unlock/lock/change-master-password/delete-vault flows. Completed
+  across Android, Chromium, and Firefox by `0.9.6`.
 - Atomic encrypted persistence with crash and corruption recovery.
 - Automatic lock on timeout, Android backgrounding, browser idle/worker death,
   OS/browser lock, and explicit lock. Completed in `0.4.0`; lifecycle testing
@@ -316,6 +369,7 @@ not be represented as production-ready.
 - Full create/read/update/delete for login, secure note, credit card, and
   identity. Completed on Android, Chromium, and Firefox in `0.9.0`.
 - Categories, tags, favorites, keyboard-accessible full-text search, and filters.
+  Completed across Android, Chromium, and Firefox in `0.11.0`.
 - Search indexes only in unlocked memory; no plaintext persistent index.
 - Password generator controls for length, character classes, ambiguous/repeated
   characters, plus entropy/coverage tests.
@@ -364,16 +418,18 @@ not be represented as production-ready.
 
 - Import 1Password, Bitwarden, LastPass, NordPass, Chrome/Chromium CSV, Firefox
   CSV, and Ironkeep encrypted vault files.
-- Preview, duplicate policy, limits, per-row errors, and one atomic commit.
+- Preview, duplicate policy, limits, row validation counts, and one atomic
+  commit. Completed for Ironkeep and common browser login CSV in `0.10.0`;
+  dedicated 1Password, Bitwarden, LastPass, and NordPass adapters remain open.
 - Export encrypted `.ikv` by default; optional CSV after reauthentication and an
   explicit plaintext warning.
 - Let users create encrypted `.ikv` backup snapshots through the system file
-  picker. Completed on Android in `0.8.0`; browser support remains open.
+  picker. Completed on Android in `0.8.0` and browsers in `0.9.5`.
 - Before restore, require reauthentication and show the snapshot revision, date,
   item count, and checksum after authentication and integrity validation.
 - Restore atomically and preserve the current encrypted vault as a recovery
-  snapshot before replacement. Completed on Android in `0.8.0`; browser support
-  remains open.
+  snapshot before replacement. Completed on Android in `0.8.0` and browsers in
+  `0.9.5`.
 
 ### Drive sync
 

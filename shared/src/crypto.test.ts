@@ -6,6 +6,7 @@ import {
   decryptVault,
   encryptVault,
   parseVaultFile,
+  persistMasterPasswordChange,
   persistVaultMutation,
   serializeVaultFile,
   unlockVault,
@@ -16,6 +17,50 @@ import { addLogin } from "./vault-mutations.js";
 const testKdf = { memoryKiB: 19 * 1024, iterations: 2, parallelism: 1 } as const;
 
 describe("Ironkeep vault envelope", () => {
+  it("changes the master password without changing vault data", async () => {
+    const payload = createEmptyVault("Test", "device-a", new Date("2026-01-01T00:00:00.000Z"));
+    const created = await createUnlockedVault("correct horse battery staple", payload, { kdf: testKdf });
+    let durableFile = created.file;
+
+    await persistMasterPasswordChange(
+      created.session,
+      "correct horse battery staple",
+      "new correct horse battery staple",
+      async (file) => { durableFile = file; },
+      { kdf: testKdf },
+    );
+
+    await expect(unlockVault("correct horse battery staple", durableFile)).rejects.toThrow(VaultAuthenticationError);
+    const reopened = await unlockVault("new correct horse battery staple", durableFile);
+    expect(reopened.payload).toEqual(payload);
+    reopened.close();
+    created.session.close();
+  });
+
+  it("keeps the prior password when password-change persistence fails", async () => {
+    const payload = createEmptyVault("Test", "device-a", new Date("2026-01-01T00:00:00.000Z"));
+    const created = await createUnlockedVault("correct horse battery staple", payload, { kdf: testKdf });
+
+    await expect(persistMasterPasswordChange(
+      created.session,
+      "correct horse battery staple",
+      "new correct horse battery staple",
+      async () => { throw new Error("disk full"); },
+      { kdf: testKdf },
+    )).rejects.toThrow("disk full");
+
+    await expect(created.session.changeMasterPassword(
+      "correct horse battery staple",
+      "another correct horse battery staple",
+      { kdf: testKdf },
+    )).resolves.toBeDefined();
+    await expect(created.session.changeMasterPassword(
+      "new correct horse battery staple",
+      "another correct horse battery staple",
+      { kdf: testKdf },
+    )).rejects.toThrow(VaultAuthenticationError);
+    created.session.close();
+  });
   it("decrypts the shared interoperability vector", async () => {
     const vector = JSON.parse(await readFile(new URL("../test-vectors/vault-v1.json", import.meta.url), "utf8")) as {
       masterPassword: string;

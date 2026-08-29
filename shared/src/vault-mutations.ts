@@ -1,4 +1,4 @@
-import type { CreditCardItem, IdentityItem, LoginItem, SecureNoteItem, VaultPayload } from "./models.js";
+import type { CreditCardItem, IdentityItem, LoginItem, SecureNoteItem, VaultCategory, VaultItem, VaultPayload, VaultTag } from "./models.js";
 import { validateSecuritySettings } from "./session-security.js";
 
 export interface LoginFields {
@@ -46,6 +46,88 @@ export interface MutationContext {
   deviceId: string;
   now?: Date;
   itemId?: string;
+}
+
+function uniqueName(name: string, existing: Array<{ id: string; name: string }>, excludeId?: string): string {
+  const normalized = name.trim();
+  if (!normalized || normalized.length > 64) throw new RangeError("Name must be between 1 and 64 characters");
+  if (existing.some((entry) => entry.id !== excludeId && entry.name.trim().toLowerCase() === normalized.toLowerCase())) {
+    throw new RangeError("Name already exists");
+  }
+  return normalized;
+}
+
+function organizedItem(item: VaultItem, categoryId: string | undefined, tagIds: string[], updatedAt: string): VaultItem {
+  const { categoryId: _existingCategoryId, ...withoutCategory } = item;
+  return {
+    ...withoutCategory,
+    ...(categoryId === undefined ? {} : { categoryId }),
+    tagIds,
+    updatedAt,
+    revision: item.revision + 1,
+  } as VaultItem;
+}
+
+export function addCategory(payload: VaultPayload, name: string, context: MutationContext): VaultPayload {
+  const updatedAt = timestamp(context);
+  const category: VaultCategory = { id: crypto.randomUUID(), name: uniqueName(name, payload.categories), icon: "folder", color: "slate" };
+  return { ...nextVault(payload, context, updatedAt), categories: [...payload.categories, category] };
+}
+
+export function renameCategory(payload: VaultPayload, categoryId: string, name: string, context: MutationContext): VaultPayload {
+  if (!payload.categories.some((entry) => entry.id === categoryId)) throw new ReferenceError("Category not found");
+  const normalized = uniqueName(name, payload.categories, categoryId);
+  return { ...nextVault(payload, context, timestamp(context)), categories: payload.categories.map((entry) => entry.id === categoryId ? { ...entry, name: normalized } : entry) };
+}
+
+export function deleteCategory(payload: VaultPayload, categoryId: string, context: MutationContext): VaultPayload {
+  if (!payload.categories.some((entry) => entry.id === categoryId)) throw new ReferenceError("Category not found");
+  const updatedAt = timestamp(context);
+  return {
+    ...nextVault(payload, context, updatedAt),
+    categories: payload.categories.filter((entry) => entry.id !== categoryId),
+    items: payload.items.map((item) => item.categoryId === categoryId ? organizedItem(item, undefined, item.tagIds, updatedAt) : item),
+  };
+}
+
+export function addTag(payload: VaultPayload, name: string, context: MutationContext): VaultPayload {
+  const tag: VaultTag = { id: crypto.randomUUID(), name: uniqueName(name, payload.tags) };
+  return { ...nextVault(payload, context, timestamp(context)), tags: [...payload.tags, tag] };
+}
+
+export function renameTag(payload: VaultPayload, tagId: string, name: string, context: MutationContext): VaultPayload {
+  if (!payload.tags.some((entry) => entry.id === tagId)) throw new ReferenceError("Tag not found");
+  const normalized = uniqueName(name, payload.tags, tagId);
+  return { ...nextVault(payload, context, timestamp(context)), tags: payload.tags.map((entry) => entry.id === tagId ? { ...entry, name: normalized } : entry) };
+}
+
+export function deleteTag(payload: VaultPayload, tagId: string, context: MutationContext): VaultPayload {
+  if (!payload.tags.some((entry) => entry.id === tagId)) throw new ReferenceError("Tag not found");
+  const updatedAt = timestamp(context);
+  return {
+    ...nextVault(payload, context, updatedAt),
+    tags: payload.tags.filter((entry) => entry.id !== tagId),
+    items: payload.items.map((item) => item.tagIds.includes(tagId) ? { ...item, tagIds: item.tagIds.filter((id) => id !== tagId), updatedAt, revision: item.revision + 1 } : item),
+  };
+}
+
+export function setItemOrganization(
+  payload: VaultPayload,
+  itemId: string,
+  categoryId: string | undefined,
+  tagIds: string[],
+  context: MutationContext,
+): VaultPayload {
+  if (categoryId !== undefined && !payload.categories.some((entry) => entry.id === categoryId)) throw new ReferenceError("Category not found");
+  const uniqueTagIds = [...new Set(tagIds)];
+  if (uniqueTagIds.some((id) => !payload.tags.some((entry) => entry.id === id))) throw new ReferenceError("Tag not found");
+  const existing = payload.items.find((item) => item.id === itemId);
+  if (!existing) throw new ReferenceError("Item not found");
+  const updatedAt = timestamp(context);
+  return {
+    ...nextVault(payload, context, updatedAt),
+    items: payload.items.map((item) => item.id === itemId ? organizedItem(item, categoryId, uniqueTagIds, updatedAt) : item),
+  };
 }
 
 function timestamp(context: MutationContext): string {

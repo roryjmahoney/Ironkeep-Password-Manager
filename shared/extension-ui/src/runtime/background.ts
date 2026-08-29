@@ -21,6 +21,19 @@ import {
   findLikelySecureNoteDuplicates,
   loginFieldsForCapture,
   persistVaultMutation,
+  persistMasterPasswordChange,
+  parseVaultFile,
+  serializeVaultFile,
+  applyVaultCsvImport,
+  exportVaultCsv,
+  previewVaultCsvImport,
+  addCategory,
+  addTag,
+  deleteCategory,
+  deleteTag,
+  renameCategory,
+  renameTag,
+  setItemOrganization,
   SessionDeadline,
   shouldClearClipboard,
   suggestCredentialCapture,
@@ -44,12 +57,15 @@ import {
   type UnlockedVault,
   type VaultFile,
   type VaultItem,
+  type ParsedCsvImportRecord,
 } from "@ironkeep/shared";
 import browser from "webextension-polyfill";
 import type { ContentRequest, ContentResponse, ExtensionRequest, ExtensionResponse, PublicCapturePrompt, PublicCreditCard, PublicIdentity, PublicLogin, PublicSecureNote, PublicVaultItem } from "./types.js";
 
 const STORAGE_KEY = "ironkeep.encryptedVault.v1";
+const RECOVERY_KEY = "ironkeep.encryptedVault.recovery.v1";
 const DEVICE_KEY = "ironkeep.deviceId";
+const MAX_BACKUP_BYTES = 64 * 1024 * 1024;
 let unlockedVault: UnlockedVault | null = null;
 const sessionDeadline = new SessionDeadline();
 const sessionNow = (): number => performance.now();
@@ -62,6 +78,17 @@ interface RuntimeSender {
   url?: string;
 }
 const pendingCaptures = new EphemeralCaptureStore();
+let pendingRestore: { token: string; session: UnlockedVault; file: VaultFile; createdAt: number } | null = null;
+let pendingCsvImport: { token: string; records: ParsedCsvImportRecord[]; createdAt: number } | null = null;
+
+function clearPendingRestore(): void {
+  pendingRestore?.session.close();
+  pendingRestore = null;
+}
+
+function clearPendingCsvImport(): void {
+  pendingCsvImport = null;
+}
 
 interface OffscreenApi {
   hasDocument?: () => Promise<boolean>;
@@ -115,6 +142,8 @@ function lockVault(): void {
   unlockedVault?.close();
   unlockedVault = null;
   pendingCaptures.clear();
+  clearPendingRestore();
+  clearPendingCsvImport();
   void clearOwnedClipboard();
 }
 
@@ -189,7 +218,15 @@ function publicItem(item: VaultItem): PublicVaultItem {
   if (item.kind === "creditCard") subtitle = item.number ? `•••• ${item.number.slice(-4)}` : "Payment card";
   if (item.kind === "identity") subtitle = item.email || "Identity";
   if (item.kind === "secureNote") subtitle = "Secure note";
-  return { id: item.id, kind: item.kind, title: item.title, subtitle, favorite: item.favorite };
+  return {
+    id: item.id,
+    kind: item.kind,
+    title: item.title,
+    subtitle,
+    favorite: item.favorite,
+    ...(item.categoryId === undefined ? {} : { categoryId: item.categoryId }),
+    tagIds: [...item.tagIds],
+  };
 }
 
 function publicLogin(item: LoginItem): PublicLogin {
@@ -606,6 +643,201 @@ async function handleRequest(request: ExtensionRequest): Promise<ExtensionRespon
           settings: {
             autoLockMinutes: next.settings.autoLockMinutes,
             clearClipboardSeconds: next.settings.clearClipboardSeconds,
+          },
+        };
+      } catch {
+        return { ok: false, error: "INVALID_REQUEST" };
+      }
+    }
+    case "CHANGE_MASTER_PASSWORD": {
+      if (!unlockedVault) return { ok: false, error: "LOCKED" };
+      if (request.newMasterPassword.length < 12 || request.currentMasterPassword === request.newMasterPassword) {
+        return { ok: false, error: "INVALID_REQUEST" };
+      }
+      try {
+        await persistMasterPasswordChange(
+          unlockedVault,
+          request.currentMasterPassword,
+          request.newMasterPassword,
+          async (file) => { await browser.storage.local.set({ [STORAGE_KEY]: file }); },
+        );
+        pendingCaptures.clear();
+        return { ok: true, status: "unlocked" };
+      } catch (error) {
+        if (error instanceof Error && error.name === "VaultAuthenticationError") {
+          return { ok: false, error: "AUTHENTICATION_FAILED" };
+        }
+        return { ok: false, error: "PERSISTENCE_FAILED" };
+      }
+    }
+    case "EXPORT_ENCRYPTED_BACKUP": {
+      if (!unlockedVault) return { ok: false, error: "LOCKED" };
+      const file = await storedFile();
+      if (!file) return { ok: false, error: "NOT_FOUND" };
+      try {
+        const bytes = serializeVaultFile(file);
+        const backup = new TextDecoder("utf-8", { fatal: true }).decode(bytes);
+        return { ok: true, backup, fileName: `ironkeep-backup-${file.revision}.ikv` };
+      } catch {
+        return { ok: false, error: "INVALID_REQUEST" };
+      }
+    }
+    case "PREVIEW_ENCRYPTED_RESTORE": {
+      if (!unlockedVault) return { ok: false, error: "LOCKED" };
+      clearPendingRestore();
+      try {
+        const bytes = new TextEncoder().encode(request.serializedVault);
+        if (bytes.byteLength === 0 || bytes.byteLength > MAX_BACKUP_BYTES) return { ok: false, error: "INVALID_REQUEST" };
+        const file = parseVaultFile(bytes);
+        const session = await unlockVault(request.masterPassword, file);
+        const digest = new Uint8Array(await crypto.subtle.digest("SHA-256", bytes));
+        const checksum = Array.from(digest, (value) => value.toString(16).padStart(2, "0")).join("");
+        const token = crypto.randomUUID();
+        pendingRestore = { token, session, file, createdAt: performance.now() };
+        return {
+          ok: true,
+          restorePreview: {
+            token,
+            revision: session.payload.revision,
+            updatedAt: session.payload.updatedAt,
+            itemCount: session.payload.items.length,
+            checksum,
+          },
+        };
+      } catch (error) {
+        clearPendingRestore();
+        return {
+          ok: false,
+          error: error instanceof Error && error.name === "VaultAuthenticationError" ? "AUTHENTICATION_FAILED" : "INVALID_REQUEST",
+        };
+      }
+    }
+    case "CONFIRM_ENCRYPTED_RESTORE": {
+      if (!unlockedVault) return { ok: false, error: "LOCKED" };
+      const candidate = pendingRestore;
+      if (!candidate || candidate.token !== request.token || performance.now() - candidate.createdAt >= 2 * 60 * 1_000) {
+        clearPendingRestore();
+        return { ok: false, error: "INVALID_REQUEST" };
+      }
+      const current = await storedFile();
+      if (!current) return { ok: false, error: "NOT_FOUND" };
+      try {
+        await browser.storage.local.set({ [RECOVERY_KEY]: current, [STORAGE_KEY]: candidate.file });
+        pendingRestore = null;
+        openSession(candidate.session);
+        pendingCaptures.clear();
+        return { ok: true, status: "unlocked" };
+      } catch {
+        return { ok: false, error: "PERSISTENCE_FAILED" };
+      }
+    }
+    case "CANCEL_ENCRYPTED_RESTORE":
+      clearPendingRestore();
+      return { ok: true, status: "unlocked" };
+    case "DELETE_LOCAL_VAULT": {
+      if (!unlockedVault) return { ok: false, error: "LOCKED" };
+      if (request.confirmation !== "DELETE") return { ok: false, error: "INVALID_REQUEST" };
+      const file = await storedFile();
+      if (!file) return { ok: false, error: "NOT_FOUND" };
+      try {
+        const verification = await unlockVault(request.masterPassword, file);
+        verification.close();
+      } catch {
+        return { ok: false, error: "AUTHENTICATION_FAILED" };
+      }
+      try {
+        await browser.storage.local.remove([STORAGE_KEY, RECOVERY_KEY]);
+        lockVault();
+        return { ok: true, status: "empty" };
+      } catch {
+        return { ok: false, error: "PERSISTENCE_FAILED" };
+      }
+    }
+    case "EXPORT_CSV": {
+      if (!unlockedVault) return { ok: false, error: "LOCKED" };
+      try {
+        const file = await storedFile();
+        if (!file) return { ok: false, error: "NOT_FOUND" };
+        const verification = await unlockVault(request.masterPassword, file);
+        verification.close();
+        return { ok: true, csv: exportVaultCsv(unlockedVault.payload), fileName: `ironkeep-export-${unlockedVault.payload.revision}.csv` };
+      } catch (error) {
+        return { ok: false, error: error instanceof Error && error.name === "VaultAuthenticationError" ? "AUTHENTICATION_FAILED" : "INVALID_REQUEST" };
+      }
+    }
+    case "PREVIEW_CSV_IMPORT": {
+      if (!unlockedVault) return { ok: false, error: "LOCKED" };
+      clearPendingCsvImport();
+      try {
+        const parsed = previewVaultCsvImport(unlockedVault.payload, request.csv);
+        if (parsed.records.length === 0) return { ok: false, error: "INVALID_REQUEST" };
+        const token = crypto.randomUUID();
+        pendingCsvImport = { token, records: parsed.records, createdAt: performance.now() };
+        return { ok: true, csvPreview: { token, ...parsed.preview } };
+      } catch {
+        return { ok: false, error: "INVALID_REQUEST" };
+      }
+    }
+    case "CONFIRM_CSV_IMPORT": {
+      if (!unlockedVault) return { ok: false, error: "LOCKED" };
+      const candidate = pendingCsvImport;
+      if (!candidate || candidate.token !== request.token || performance.now() - candidate.createdAt >= 2 * 60 * 1_000) {
+        clearPendingCsvImport();
+        return { ok: false, error: "INVALID_REQUEST" };
+      }
+      try {
+        const next = applyVaultCsvImport(
+          unlockedVault.payload,
+          candidate.records,
+          request.includeDuplicates,
+          { deviceId: await deviceId() },
+        );
+        if (next === unlockedVault.payload) {
+          clearPendingCsvImport();
+          return { ok: true, status: "unlocked" };
+        }
+        if (!await persist(next)) return { ok: false, error: "PERSISTENCE_FAILED" };
+        clearPendingCsvImport();
+        return { ok: true, status: "unlocked" };
+      } catch {
+        return { ok: false, error: "INVALID_REQUEST" };
+      }
+    }
+    case "CANCEL_CSV_IMPORT":
+      clearPendingCsvImport();
+      return { ok: true, status: "unlocked" };
+    case "GET_ORGANIZATION":
+      return unlockedVault ? {
+        ok: true,
+        organization: {
+          categories: unlockedVault.payload.categories.map(({ id, name }) => ({ id, name })),
+          tags: unlockedVault.payload.tags.map(({ id, name }) => ({ id, name })),
+        },
+      } : { ok: false, error: "LOCKED" };
+    case "CREATE_CATEGORY":
+    case "RENAME_CATEGORY":
+    case "DELETE_CATEGORY":
+    case "CREATE_TAG":
+    case "RENAME_TAG":
+    case "DELETE_TAG":
+    case "SET_ITEM_ORGANIZATION": {
+      if (!unlockedVault) return { ok: false, error: "LOCKED" };
+      try {
+        const context = { deviceId: await deviceId() };
+        let next: UnlockedVault["payload"];
+        if (request.type === "CREATE_CATEGORY") next = addCategory(unlockedVault.payload, request.name, context);
+        else if (request.type === "RENAME_CATEGORY") next = renameCategory(unlockedVault.payload, request.categoryId, request.name, context);
+        else if (request.type === "DELETE_CATEGORY") next = deleteCategory(unlockedVault.payload, request.categoryId, context);
+        else if (request.type === "CREATE_TAG") next = addTag(unlockedVault.payload, request.name, context);
+        else if (request.type === "RENAME_TAG") next = renameTag(unlockedVault.payload, request.tagId, request.name, context);
+        else if (request.type === "DELETE_TAG") next = deleteTag(unlockedVault.payload, request.tagId, context);
+        else next = setItemOrganization(unlockedVault.payload, request.itemId, request.categoryId, request.tagIds, context);
+        if (!await persist(next)) return { ok: false, error: "PERSISTENCE_FAILED" };
+        return {
+          ok: true,
+          organization: {
+            categories: next.categories.map(({ id, name }) => ({ id, name })),
+            tags: next.tags.map(({ id, name }) => ({ id, name })),
           },
         };
       } catch {

@@ -76,6 +76,12 @@ Ironkeep is pre-audit alpha software. Report vulnerabilities privately using
 the instructions in [`.github/SECURITY.md`](.github/SECURITY.md); do not post
 secrets, exploit details, or vulnerable vault files in a public issue.
 
+There is no known break in Ironkeep's vault encryption. Existing users should
+still review whether their master password is strong and unique because this is
+pre-audit software. Version 0.11.0 adds **Settings → Change master password** on
+Android, Chromium, and Firefox. A change applies to that local vault; separately
+replace or re-export older backups and update other device-local vault copies.
+
 ## License
 
 Ironkeep source code is licensed under the

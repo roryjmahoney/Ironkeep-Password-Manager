@@ -53,6 +53,13 @@ export interface EncryptPayloadOptions {
   payloadNonce?: Uint8Array;
 }
 
+export interface ChangeMasterPasswordOptions {
+  kdf?: Omit<KdfParameters, "algorithm" | "salt">;
+  salt?: Uint8Array;
+  keyWrapNonce?: Uint8Array;
+  payloadNonce?: Uint8Array;
+}
+
 export interface EncryptedVaultSession {
   file: VaultFile;
   session: UnlockedVault;
@@ -283,6 +290,73 @@ export class UnlockedVault {
     }
   }
 
+  async changeMasterPassword(
+    currentMasterPassword: string,
+    newMasterPassword: string,
+    options: ChangeMasterPasswordOptions = {},
+  ): Promise<VaultFile> {
+    if (this.#closed) throw new Error("Vault session is locked");
+    if (newMasterPassword.length < 12) throw new RangeError("Master password must be at least 12 characters");
+
+    let currentKeyEncryptionKey: Uint8Array | undefined;
+    let verifiedDataKey: Uint8Array | undefined;
+    let newKeyEncryptionKey: Uint8Array | undefined;
+    const requestedKdf = options.kdf ?? DEFAULT_KDF_PARAMETERS;
+    validateKdf(requestedKdf);
+    const salt = options.salt?.slice() ?? randomBytes(ARGON2_SALT_BYTES);
+    const keyWrapNonce = options.keyWrapNonce?.slice() ?? randomBytes(AES_GCM_NONCE_BYTES);
+    const payloadNonce = options.payloadNonce?.slice() ?? randomBytes(AES_GCM_NONCE_BYTES);
+    if (salt.length !== ARGON2_SALT_BYTES || keyWrapNonce.length !== AES_GCM_NONCE_BYTES || payloadNonce.length !== AES_GCM_NONCE_BYTES) {
+      salt.fill(0);
+      keyWrapNonce.fill(0);
+      payloadNonce.fill(0);
+      throw new RangeError("Invalid cryptographic material length");
+    }
+
+    try {
+      currentKeyEncryptionKey = await deriveKeyEncryptionKey(currentMasterPassword, this.#file.kdf);
+      verifiedDataKey = await aesDecrypt(
+        currentKeyEncryptionKey,
+        base64UrlToBytes(this.#file.keyWrap.ciphertext),
+        base64UrlToBytes(this.#file.keyWrap.nonce),
+        keyWrapAad(this.#file),
+      );
+      if (!sameBytes(verifiedDataKey, this.#dataKey)) throw new VaultAuthenticationError();
+
+      const kdf: KdfParameters = { algorithm: "argon2id", salt: bytesToBase64Url(salt), ...requestedKdf };
+      const header = {
+        format: this.#file.format,
+        fileVersion: this.#file.fileVersion,
+        vaultId: this.#file.vaultId,
+        revision: this.#file.revision,
+        updatedAt: this.#file.updatedAt,
+        writerDeviceId: this.#file.writerDeviceId,
+        kdf,
+      } as const;
+      newKeyEncryptionKey = await deriveKeyEncryptionKey(newMasterPassword, kdf);
+      const wrappedKey = await aesEncrypt(newKeyEncryptionKey, this.#dataKey, keyWrapNonce, keyWrapAad(header));
+      const keyWrap = encryptedBlob(keyWrapNonce, wrappedKey);
+      const withoutPayload = { ...header, keyWrap };
+      const plaintext = encoder.encode(JSON.stringify(this.payload));
+      try {
+        const encryptedPayload = await aesEncrypt(this.#dataKey, plaintext, payloadNonce, payloadAad(withoutPayload));
+        return { ...withoutPayload, payload: encryptedBlob(payloadNonce, encryptedPayload) };
+      } finally {
+        plaintext.fill(0);
+      }
+    } catch (error) {
+      if (error instanceof TypeError || error instanceof RangeError || error instanceof VaultAuthenticationError) throw error;
+      throw new VaultAuthenticationError();
+    } finally {
+      currentKeyEncryptionKey?.fill(0);
+      verifiedDataKey?.fill(0);
+      newKeyEncryptionKey?.fill(0);
+      salt.fill(0);
+      keyWrapNonce.fill(0);
+      payloadNonce.fill(0);
+    }
+  }
+
   commit(file: VaultFile, payload: VaultPayload): void {
     if (this.#closed) throw new Error("Vault session is locked");
     assertEnvelope(file);
@@ -303,6 +377,20 @@ export class UnlockedVault {
     }
     this.#file = file;
     this.payload = payload;
+  }
+
+  commitMasterPasswordChange(file: VaultFile): void {
+    if (this.#closed) throw new Error("Vault session is locked");
+    assertEnvelope(file);
+    if (
+      file.vaultId !== this.payload.vaultId ||
+      file.revision !== this.payload.revision ||
+      file.updatedAt !== this.payload.updatedAt ||
+      file.writerDeviceId !== this.payload.writerDeviceId
+    ) {
+      throw new TypeError("Password-change vault metadata does not match");
+    }
+    this.#file = file;
   }
 
   close(): void {
@@ -448,6 +536,19 @@ export async function persistVaultMutation(
   const file = await session.encryptPayload(payload);
   await write(file);
   session.commit(file, payload);
+  return file;
+}
+
+export async function persistMasterPasswordChange(
+  session: UnlockedVault,
+  currentMasterPassword: string,
+  newMasterPassword: string,
+  write: (file: VaultFile) => Promise<void>,
+  options: ChangeMasterPasswordOptions = {},
+): Promise<VaultFile> {
+  const file = await session.changeMasterPassword(currentMasterPassword, newMasterPassword, options);
+  await write(file);
+  session.commitMasterPasswordChange(file);
   return file;
 }
 

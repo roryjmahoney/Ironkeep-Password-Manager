@@ -47,6 +47,68 @@ data class IdentityFields(
 )
 
 object VaultMutations {
+    fun addCategory(payload: VaultPayload, name: String, deviceId: String, now: Instant = Instant.now()): VaultPayload {
+        val normalized = uniqueName(name, payload.categories.map { it.id to it.name })
+        return payload.next(deviceId, now.toString()).copy(
+            categories = payload.categories + VaultCategory(UUID.randomUUID().toString(), normalized, "folder", "slate"),
+        )
+    }
+
+    fun renameCategory(payload: VaultPayload, categoryId: String, name: String, deviceId: String, now: Instant = Instant.now()): VaultPayload {
+        require(payload.categories.any { it.id == categoryId }) { "Category not found" }
+        val normalized = uniqueName(name, payload.categories.map { it.id to it.name }, categoryId)
+        return payload.next(deviceId, now.toString()).copy(
+            categories = payload.categories.map { if (it.id == categoryId) it.copy(name = normalized) else it },
+        )
+    }
+
+    fun deleteCategory(payload: VaultPayload, categoryId: String, deviceId: String, now: Instant = Instant.now()): VaultPayload {
+        require(payload.categories.any { it.id == categoryId }) { "Category not found" }
+        val timestamp = now.toString()
+        return payload.next(deviceId, timestamp).copy(
+            categories = payload.categories.filterNot { it.id == categoryId },
+            items = payload.items.map { item -> if (item.categoryId == categoryId) item.organized(null, item.tagIds, timestamp) else item },
+        )
+    }
+
+    fun addTag(payload: VaultPayload, name: String, deviceId: String, now: Instant = Instant.now()): VaultPayload {
+        val normalized = uniqueName(name, payload.tags.map { it.id to it.name })
+        return payload.next(deviceId, now.toString()).copy(tags = payload.tags + VaultTag(UUID.randomUUID().toString(), normalized))
+    }
+
+    fun renameTag(payload: VaultPayload, tagId: String, name: String, deviceId: String, now: Instant = Instant.now()): VaultPayload {
+        require(payload.tags.any { it.id == tagId }) { "Tag not found" }
+        val normalized = uniqueName(name, payload.tags.map { it.id to it.name }, tagId)
+        return payload.next(deviceId, now.toString()).copy(tags = payload.tags.map { if (it.id == tagId) it.copy(name = normalized) else it })
+    }
+
+    fun deleteTag(payload: VaultPayload, tagId: String, deviceId: String, now: Instant = Instant.now()): VaultPayload {
+        require(payload.tags.any { it.id == tagId }) { "Tag not found" }
+        val timestamp = now.toString()
+        return payload.next(deviceId, timestamp).copy(
+            tags = payload.tags.filterNot { it.id == tagId },
+            items = payload.items.map { item -> if (tagId in item.tagIds) item.organized(item.categoryId, item.tagIds - tagId, timestamp) else item },
+        )
+    }
+
+    fun setItemOrganization(
+        payload: VaultPayload,
+        itemId: String,
+        categoryId: String?,
+        tagIds: List<String>,
+        deviceId: String,
+        now: Instant = Instant.now(),
+    ): VaultPayload {
+        require(categoryId == null || payload.categories.any { it.id == categoryId }) { "Category not found" }
+        val uniqueTags = tagIds.distinct()
+        require(uniqueTags.all { id -> payload.tags.any { it.id == id } }) { "Tag not found" }
+        require(payload.items.any { it.id == itemId }) { "Item not found" }
+        val timestamp = now.toString()
+        return payload.next(deviceId, timestamp).copy(
+            items = payload.items.map { item -> if (item.id == itemId) item.organized(categoryId, uniqueTags, timestamp) else item },
+        )
+    }
+
     fun addLogin(
         payload: VaultPayload,
         fields: LoginFields,
@@ -361,6 +423,20 @@ object VaultMutations {
     private fun VaultPayload.next(deviceId: String, updatedAt: String): VaultPayload {
         require(deviceId.isNotBlank() && revision < Long.MAX_VALUE) { "Invalid mutation metadata" }
         return copy(revision = revision + 1, updatedAt = updatedAt, writerDeviceId = deviceId)
+    }
+
+    private fun uniqueName(name: String, existing: List<Pair<String, String>>, excludeId: String? = null): String {
+        val normalized = name.trim()
+        require(normalized.isNotEmpty() && normalized.length <= 64) { "Name must be between 1 and 64 characters" }
+        require(existing.none { (id, value) -> id != excludeId && value.trim().equals(normalized, true) }) { "Name already exists" }
+        return normalized
+    }
+
+    private fun VaultItem.organized(categoryId: String?, tagIds: List<String>, updatedAt: String): VaultItem = when (this) {
+        is LoginItem -> copy(categoryId = categoryId, tagIds = tagIds, updatedAt = updatedAt, revision = revision + 1)
+        is SecureNoteItem -> copy(categoryId = categoryId, tagIds = tagIds, updatedAt = updatedAt, revision = revision + 1)
+        is CreditCardItem -> copy(categoryId = categoryId, tagIds = tagIds, updatedAt = updatedAt, revision = revision + 1)
+        is IdentityItem -> copy(categoryId = categoryId, tagIds = tagIds, updatedAt = updatedAt, revision = revision + 1)
     }
 
     private fun LoginFields.validated(): LoginFields {

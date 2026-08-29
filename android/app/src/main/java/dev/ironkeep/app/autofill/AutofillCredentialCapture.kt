@@ -3,6 +3,8 @@ package dev.ironkeep.app.autofill
 import android.os.SystemClock
 import dev.ironkeep.app.vault.model.LoginFields
 import dev.ironkeep.app.vault.model.LoginItem
+import dev.ironkeep.app.vault.model.CreditCardFields
+import dev.ironkeep.app.vault.model.CreditCardItem
 import dev.ironkeep.app.vault.model.VaultPayload
 import java.net.URI
 import java.util.UUID
@@ -18,25 +20,60 @@ internal data class AutofillTarget(
     val displayValue: String get() = webOrigin ?: requireNotNull(androidPackageName)
 }
 
+internal sealed interface AutofillSaveCandidate {
+    val vaultId: String
+    val title: String
+    val target: AutofillTarget
+    fun clear()
+}
+
 internal class AutofillCredentialCandidate(
-    val vaultId: String,
-    val title: String,
+    override val vaultId: String,
+    override val title: String,
     val username: String,
     password: CharArray,
-    val target: AutofillTarget,
-) {
+    override val target: AutofillTarget,
+) : AutofillSaveCandidate {
     private val password = password.copyOf()
 
     fun passwordString(): String = password.concatToString()
 
-    fun clear() = password.fill('\u0000')
+    override fun clear() = password.fill('\u0000')
 }
 
 internal data class AutofillCandidateSummary(
+    val kind: String,
     val title: String,
-    val username: String,
+    val primaryLabel: String,
+    val primaryValue: String,
     val target: String,
 )
+
+internal class AutofillCreditCardCandidate(
+    override val vaultId: String,
+    override val title: String,
+    cardholderName: CharArray,
+    number: CharArray,
+    val expiryMonth: Int,
+    val expiryYear: Int,
+    verificationCode: CharArray,
+    override val target: AutofillTarget,
+) : AutofillSaveCandidate {
+    private val cardholderName = cardholderName
+    private val number = number
+    private val verificationCode = verificationCode
+
+    fun cardholderNameString(): String = cardholderName.concatToString()
+    fun numberString(): String = number.concatToString()
+    fun lastFour(): String = number.takeLast(4).toCharArray().concatToString()
+    fun verificationCodeString(): String = verificationCode.concatToString()
+
+    override fun clear() {
+        cardholderName.fill('\u0000')
+        number.fill('\u0000')
+        verificationCode.fill('\u0000')
+    }
+}
 
 internal object AutofillSavePlanner {
     fun matchingLogins(payload: VaultPayload, candidate: AutofillCredentialCandidate): List<LoginItem> =
@@ -75,19 +112,55 @@ internal object AutofillSavePlanner {
     }
 }
 
+internal object AutofillCreditCardSavePlanner {
+    fun matchingCards(payload: VaultPayload, candidate: AutofillCreditCardCandidate): List<CreditCardItem> {
+        val number = candidate.numberString().filter(Char::isDigit)
+        return payload.items.filterIsInstance<CreditCardItem>().filter { it.number.filter(Char::isDigit) == number }
+    }
+
+    fun isUnchanged(payload: VaultPayload, candidate: AutofillCreditCardCandidate): Boolean =
+        matchingCards(payload, candidate).any { card ->
+            card.cardholderName == candidate.cardholderNameString() &&
+                card.expiryMonth == candidate.expiryMonth && card.expiryYear == candidate.expiryYear &&
+                card.verificationCode == candidate.verificationCodeString()
+        }
+
+    fun createFields(candidate: AutofillCreditCardCandidate): CreditCardFields = CreditCardFields(
+        title = candidate.title,
+        cardholderName = candidate.cardholderNameString(),
+        number = candidate.numberString(),
+        expiryMonth = candidate.expiryMonth,
+        expiryYear = candidate.expiryYear,
+        verificationCode = candidate.verificationCodeString(),
+        pin = null,
+        notes = "",
+    )
+
+    fun updateFields(candidate: AutofillCreditCardCandidate, existing: CreditCardItem): CreditCardFields = CreditCardFields(
+        title = existing.title,
+        cardholderName = candidate.cardholderNameString(),
+        number = candidate.numberString(),
+        expiryMonth = candidate.expiryMonth,
+        expiryYear = candidate.expiryYear,
+        verificationCode = candidate.verificationCodeString(),
+        pin = existing.pin,
+        notes = existing.notes,
+    )
+}
+
 internal object AutofillPendingSaveStore {
     private const val TIMEOUT_MILLIS = 2 * 60 * 1_000L
 
     private data class Pending(
         val token: String,
-        val candidate: AutofillCredentialCandidate,
+        val candidate: AutofillSaveCandidate,
         val createdAtMillis: Long,
     )
 
     private var pending: Pending? = null
 
     @Synchronized
-    fun put(candidate: AutofillCredentialCandidate, nowMillis: Long = SystemClock.elapsedRealtime()): String {
+    fun put(candidate: AutofillSaveCandidate, nowMillis: Long = SystemClock.elapsedRealtime()): String {
         clearLocked()
         val token = UUID.randomUUID().toString()
         pending = Pending(token, candidate, nowMillis)
@@ -97,11 +170,20 @@ internal object AutofillPendingSaveStore {
     @Synchronized
     fun summary(token: String, nowMillis: Long = SystemClock.elapsedRealtime()): AutofillCandidateSummary? {
         val candidate = candidateLocked(token, nowMillis) ?: return null
-        return AutofillCandidateSummary(candidate.title, candidate.username, candidate.target.displayValue)
+        return when (candidate) {
+            is AutofillCredentialCandidate -> AutofillCandidateSummary("login", candidate.title, "Account", candidate.username, candidate.target.displayValue)
+            is AutofillCreditCardCandidate -> AutofillCandidateSummary(
+                "payment card",
+                candidate.title,
+                "Card",
+                "•••• ${candidate.lastFour()}",
+                candidate.target.displayValue,
+            )
+        }
     }
 
     @Synchronized
-    fun candidate(token: String, nowMillis: Long = SystemClock.elapsedRealtime()): AutofillCredentialCandidate? =
+    fun candidate(token: String, nowMillis: Long = SystemClock.elapsedRealtime()): AutofillSaveCandidate? =
         candidateLocked(token, nowMillis)
 
     @Synchronized
@@ -112,7 +194,7 @@ internal object AutofillPendingSaveStore {
     @Synchronized
     fun clear() = clearLocked()
 
-    private fun candidateLocked(token: String, nowMillis: Long): AutofillCredentialCandidate? {
+    private fun candidateLocked(token: String, nowMillis: Long): AutofillSaveCandidate? {
         val value = pending ?: return null
         if (nowMillis - value.createdAtMillis >= TIMEOUT_MILLIS || value.token != token) {
             if (nowMillis - value.createdAtMillis >= TIMEOUT_MILLIS) clearLocked()

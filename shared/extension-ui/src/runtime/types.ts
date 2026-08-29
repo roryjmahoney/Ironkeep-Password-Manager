@@ -6,7 +6,13 @@ export interface PublicVaultItem {
   title: string;
   subtitle: string;
   favorite: boolean;
+  categoryId?: string;
+  tagIds: string[];
 }
+
+export interface PublicCategory { id: string; name: string }
+export interface PublicTag { id: string; name: string }
+export interface PublicOrganization { categories: PublicCategory[]; tags: PublicTag[] }
 
 export interface PublicLogin extends PublicVaultItem, LoginFields {
   kind: "login";
@@ -37,6 +43,22 @@ export interface PublicCapturePrompt {
   suggestedAction: "create" | "update" | "choose";
   suggestedItemId?: string;
   matches: PublicVaultItem[];
+}
+
+export interface PublicRestorePreview {
+  token: string;
+  revision: number;
+  updatedAt: string;
+  itemCount: number;
+  checksum: string;
+}
+
+export interface PublicCsvPreview {
+  token: string;
+  totalRows: number;
+  validRows: number;
+  duplicateRows: number;
+  invalidRows: number;
 }
 
 export type ContentRequest =
@@ -82,6 +104,24 @@ export type ExtensionRequest =
   | { type: "FILL_ITEM"; itemId: string; tabId: number }
   | { type: "GET_SECURITY_SETTINGS" }
   | { type: "UPDATE_SECURITY_SETTINGS"; settings: PublicSecuritySettings }
+  | { type: "CHANGE_MASTER_PASSWORD"; currentMasterPassword: string; newMasterPassword: string }
+  | { type: "EXPORT_ENCRYPTED_BACKUP" }
+  | { type: "PREVIEW_ENCRYPTED_RESTORE"; serializedVault: string; masterPassword: string }
+  | { type: "CONFIRM_ENCRYPTED_RESTORE"; token: string }
+  | { type: "CANCEL_ENCRYPTED_RESTORE" }
+  | { type: "DELETE_LOCAL_VAULT"; masterPassword: string; confirmation: string }
+  | { type: "EXPORT_CSV"; masterPassword: string }
+  | { type: "PREVIEW_CSV_IMPORT"; csv: string }
+  | { type: "CONFIRM_CSV_IMPORT"; token: string; includeDuplicates: boolean }
+  | { type: "CANCEL_CSV_IMPORT" }
+  | { type: "GET_ORGANIZATION" }
+  | { type: "CREATE_CATEGORY"; name: string }
+  | { type: "RENAME_CATEGORY"; categoryId: string; name: string }
+  | { type: "DELETE_CATEGORY"; categoryId: string }
+  | { type: "CREATE_TAG"; name: string }
+  | { type: "RENAME_TAG"; tagId: string; name: string }
+  | { type: "DELETE_TAG"; tagId: string }
+  | { type: "SET_ITEM_ORGANIZATION"; itemId: string; categoryId?: string; tagIds: string[] }
   | { type: "COPY_SECRET"; value: string };
 
 export type ExtensionResponse =
@@ -92,6 +132,11 @@ export type ExtensionResponse =
   | { ok: true; item: PublicCreditCard }
   | { ok: true; item: PublicIdentity }
   | { ok: true; settings: PublicSecuritySettings }
+  | { ok: true; backup: string; fileName: string }
+  | { ok: true; restorePreview: PublicRestorePreview }
+  | { ok: true; csv: string; fileName: string }
+  | { ok: true; csvPreview: PublicCsvPreview }
+  | { ok: true; organization: PublicOrganization }
   | { ok: true; copied: true; clearAfterSeconds: number }
   | { ok: false; error: "DUPLICATE"; items: PublicVaultItem[] }
   | { ok: false; error: "AUTHENTICATION_FAILED" | "LOCKED" | "NOT_FOUND" | "INVALID_REQUEST" | "PERSISTENCE_FAILED" };

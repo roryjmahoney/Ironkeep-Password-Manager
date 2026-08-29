@@ -45,6 +45,31 @@ class AutofillCredentialCaptureTest {
     }
 
     @Test
+    fun paymentCardSavePlannerFindsDuplicatesAndPreservesExistingMetadata() {
+        val existing = creditCard()
+        val payload = VaultPayload.empty("Test", "device-a").copy(items = listOf(existing))
+        val candidate = AutofillCreditCardCandidate(
+            "vault-one",
+            "Example card",
+            "Updated Person".toCharArray(),
+            "4111111111111111".toCharArray(),
+            8,
+            2031,
+            "999".toCharArray(),
+            AutofillTarget(webOrigin = "https://example.com"),
+        )
+
+        assertEquals(listOf(existing), AutofillCreditCardSavePlanner.matchingCards(payload, candidate))
+        assertFalse(AutofillCreditCardSavePlanner.isUnchanged(payload, candidate))
+        val update = AutofillCreditCardSavePlanner.updateFields(candidate, existing)
+        assertEquals("Test card", update.title)
+        assertEquals("Updated Person", update.cardholderName)
+        assertEquals(8, update.expiryMonth)
+        candidate.clear()
+        assertTrue(candidate.numberString().all { it == '\u0000' })
+    }
+
+    @Test
     fun webTargetsRequireHttpsAndNormalizeExactOrigin() {
         assertEquals("https://example.com", httpsOrigin("HTTPS", "Example.COM"))
         assertEquals("https://example.com:8443", httpsOrigin("https", "example.com:8443"))

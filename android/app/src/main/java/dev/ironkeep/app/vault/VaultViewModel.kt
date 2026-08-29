@@ -15,6 +15,10 @@ import dev.ironkeep.app.vault.crypto.BiometricVaultBinding
 import dev.ironkeep.app.vault.crypto.BiometricVaultRecord
 import dev.ironkeep.app.vault.crypto.VaultAuthenticationException
 import dev.ironkeep.app.vault.crypto.VaultCrypto
+import dev.ironkeep.app.vault.csv.CsvPreview
+import dev.ironkeep.app.vault.csv.MAX_CSV_BYTES
+import dev.ironkeep.app.vault.csv.ParsedCsvRecord
+import dev.ironkeep.app.vault.csv.VaultCsv
 import dev.ironkeep.app.vault.model.LoginFields
 import dev.ironkeep.app.vault.model.CreditCardFields
 import dev.ironkeep.app.vault.model.IdentityFields
@@ -70,6 +74,13 @@ sealed interface BackupUiState {
     data class Preview(val details: RestorePreview) : BackupUiState
 }
 
+sealed interface CsvUiState {
+    data object Idle : CsvUiState
+    data object Reading : CsvUiState
+    data object ExportReady : CsvUiState
+    data class Preview(val details: CsvPreview) : CsvUiState
+}
+
 private sealed interface PendingBiometric {
     val cipher: Cipher
 
@@ -88,10 +99,15 @@ class VaultViewModel(application: Application) : AndroidViewModel(application) {
     private val sessionDeadline = SessionDeadline()
     private val secureClipboard = SecureClipboard(application, viewModelScope)
     private val deviceIdProvider = DeviceIdProvider(application)
+    private val onboardingPreferences = application.getSharedPreferences("ironkeep.onboarding", Application.MODE_PRIVATE)
     private val mutableState = MutableStateFlow<VaultUiState>(VaultUiState.Loading)
     val state: StateFlow<VaultUiState> = mutableState.asStateFlow()
     private val mutableBackupState = MutableStateFlow<BackupUiState>(BackupUiState.Idle)
     val backupState: StateFlow<BackupUiState> = mutableBackupState.asStateFlow()
+    private val mutableCsvState = MutableStateFlow<CsvUiState>(CsvUiState.Idle)
+    val csvState: StateFlow<CsvUiState> = mutableCsvState.asStateFlow()
+    private val mutableOnboardingRequired = MutableStateFlow(!onboardingPreferences.getBoolean("autofill_setup_seen_v1", false))
+    val onboardingRequired: StateFlow<Boolean> = mutableOnboardingRequired.asStateFlow()
     private val mutableBiometricRequests = MutableSharedFlow<BiometricPromptRequest>(extraBufferCapacity = 1)
     val biometricRequests: SharedFlow<BiometricPromptRequest> = mutableBiometricRequests.asSharedFlow()
     private val mutableBiometricCancelRequests = MutableSharedFlow<Unit>(extraBufferCapacity = 1)
@@ -101,6 +117,7 @@ class VaultViewModel(application: Application) : AndroidViewModel(application) {
     private var sessionLockJob: Job? = null
     private var pendingRestoreBytes: ByteArray? = null
     private var pendingRestore: AuthenticatedRestore? = null
+    private var pendingCsvRecords: List<ParsedCsvRecord>? = null
 
     init {
         mutableState.value = if (store.exists()) VaultUiState.Locked(biometricMaterialPresent()) else VaultUiState.Setup
@@ -158,6 +175,11 @@ class VaultViewModel(application: Application) : AndroidViewModel(application) {
 
     fun lock() {
         viewModelScope.launch { lockSession(null) }
+    }
+
+    fun completeOnboarding() {
+        onboardingPreferences.edit().putBoolean("autofill_setup_seen_v1", true).apply()
+        mutableOnboardingRequired.value = false
     }
 
     fun recordUserActivity() {
@@ -302,6 +324,83 @@ class VaultViewModel(application: Application) : AndroidViewModel(application) {
         VaultMutations.updateSecuritySettings(payload, autoLockMinutes, clearClipboardSeconds, deviceId())
     }
 
+    fun changeMasterPassword(currentMasterPassword: CharArray, newMasterPassword: CharArray) {
+        if (newMasterPassword.size < 12 || currentMasterPassword.contentEquals(newMasterPassword)) {
+            currentMasterPassword.fill('\u0000')
+            newMasterPassword.fill('\u0000')
+            updateUnlockedError(if (newMasterPassword.size < 12) "Use at least 12 characters." else "Choose a different master password.")
+            return
+        }
+        recordUserActivity()
+        viewModelScope.launch {
+            val session = VaultSessionHolder.sessionOrNull()
+            if (session == null) {
+                currentMasterPassword.fill('\u0000')
+                newMasterPassword.fill('\u0000')
+                mutableState.value = VaultUiState.Locked(biometricMaterialPresent())
+                return@launch
+            }
+            try {
+                val changed = withContext(Dispatchers.Default) {
+                    crypto.changeMasterPassword(session, currentMasterPassword, newMasterPassword)
+                }
+                withContext(Dispatchers.IO) { store.write(changed) }
+                session.commitMasterPasswordChange(changed)
+                withContext(Dispatchers.IO) { clearBiometricMaterial() }
+                mutableState.value = VaultUiState.Unlocked(
+                    session.payload,
+                    notice = "Master password changed. Biometric unlock was reset; enable it again if wanted.",
+                    biometricEnabled = false,
+                )
+                scheduleSessionLock()
+            } catch (_: VaultAuthenticationException) {
+                updateUnlockedError("Current master password was not accepted.")
+            } catch (_: Exception) {
+                updateUnlockedError("Master password could not be changed. The previous password still works.")
+            } finally {
+                currentMasterPassword.fill('\u0000')
+                newMasterPassword.fill('\u0000')
+            }
+        }
+    }
+
+    fun deleteVault(masterPassword: CharArray, confirmation: String) {
+        if (confirmation != "DELETE") {
+            masterPassword.fill('\u0000')
+            updateUnlockedError("Type DELETE to confirm permanent local vault deletion.")
+            return
+        }
+        recordUserActivity()
+        viewModelScope.launch {
+            val session = VaultSessionHolder.sessionOrNull()
+            if (session == null) {
+                masterPassword.fill('\u0000')
+                mutableState.value = VaultUiState.Locked(biometricMaterialPresent())
+                return@launch
+            }
+            try {
+                withContext(Dispatchers.Default) { crypto.unlock(masterPassword, session.file).close() }
+                withContext(Dispatchers.IO) {
+                    store.deleteAll()
+                    clearBiometricMaterial()
+                }
+                clearPendingRestore()
+                clearPendingCsv()
+                AutofillPendingSaveStore.clear()
+                VaultSessionHolder.lock()
+                sessionDeadline.close()
+                sessionLockJob?.cancel()
+                mutableState.value = VaultUiState.Setup
+            } catch (_: VaultAuthenticationException) {
+                updateUnlockedError("Master password was not accepted. Vault was not deleted.")
+            } catch (_: Exception) {
+                updateUnlockedError("Vault could not be deleted safely.")
+            } finally {
+                masterPassword.fill('\u0000')
+            }
+        }
+    }
+
     fun exportSnapshot(uri: Uri) {
         val session = VaultSessionHolder.sessionOrNull() ?: return
         recordUserActivity()
@@ -325,8 +424,112 @@ class VaultViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
+    fun exportCsv(uri: Uri) {
+        val session = VaultSessionHolder.sessionOrNull() ?: return
+        recordUserActivity()
+        viewModelScope.launch {
+            try {
+                val bytes = withContext(Dispatchers.Default) { VaultCsv.export(session.payload) }
+                try {
+                    withContext(Dispatchers.IO) {
+                        getApplication<Application>().contentResolver.openOutputStream(uri, "wt")?.use { output ->
+                            output.write(bytes)
+                            output.flush()
+                        } ?: error("Document provider refused output")
+                    }
+                } finally {
+                    bytes.fill(0)
+                }
+                updateUnlockedNotice("Plaintext CSV exported. Store it securely and delete it when finished.")
+            } catch (_: Exception) {
+                updateUnlockedError("CSV could not be exported.")
+            }
+        }
+    }
+
+    fun authenticateCsvExport(masterPassword: CharArray) {
+        val session = VaultSessionHolder.sessionOrNull() ?: run {
+            masterPassword.fill('\u0000')
+            mutableState.value = VaultUiState.Locked(biometricMaterialPresent())
+            return
+        }
+        viewModelScope.launch {
+            try {
+                withContext(Dispatchers.Default) { crypto.unlock(masterPassword, session.file).close() }
+                mutableCsvState.value = CsvUiState.ExportReady
+            } catch (_: VaultAuthenticationException) {
+                updateUnlockedError("Master password was not accepted. CSV was not exported.")
+            } catch (_: Exception) {
+                updateUnlockedError("CSV export authentication failed.")
+            } finally {
+                masterPassword.fill('\u0000')
+            }
+        }
+    }
+
+    fun loadCsv(uri: Uri) {
+        clearPendingCsv()
+        mutableCsvState.value = CsvUiState.Reading
+        val session = VaultSessionHolder.sessionOrNull() ?: run {
+            mutableCsvState.value = CsvUiState.Idle
+            return
+        }
+        viewModelScope.launch {
+            try {
+                val bytes = withContext(Dispatchers.IO) {
+                    getApplication<Application>().contentResolver.openInputStream(uri)?.use { input ->
+                        input.readBounded(MAX_CSV_BYTES)
+                    } ?: error("Document provider refused input")
+                }
+                val parsed = try {
+                    withContext(Dispatchers.Default) { VaultCsv.preview(session.payload, bytes) }
+                } finally {
+                    bytes.fill(0)
+                }
+                require(parsed.records.isNotEmpty()) { "CSV has no valid rows" }
+                pendingCsvRecords = parsed.records
+                mutableCsvState.value = CsvUiState.Preview(parsed.preview)
+            } catch (_: Exception) {
+                clearPendingCsv()
+                updateUnlockedError("CSV is empty, malformed, unsupported, or contains no valid rows.")
+            }
+        }
+    }
+
+    fun confirmCsvImport(includeDuplicates: Boolean) {
+        val records = pendingCsvRecords ?: return
+        viewModelScope.launch {
+            val biometricEnabled = (mutableState.value as? VaultUiState.Unlocked)?.biometricEnabled == true
+            val imported = records.count { includeDuplicates || !it.duplicate }
+            if (imported == 0) {
+                clearPendingCsv()
+                val current = VaultSessionHolder.sessionOrNull()?.payload ?: return@launch
+                mutableState.value = VaultUiState.Unlocked(current, notice = "No new items imported.", biometricEnabled = biometricEnabled)
+                return@launch
+            }
+            when (val result = mutationCoordinator.mutate { payload -> VaultCsv.apply(payload, records, includeDuplicates, deviceId()) }) {
+                is VaultMutationResult.Success -> {
+                    clearPendingCsv()
+                    mutableState.value = VaultUiState.Unlocked(
+                        result.payload,
+                        notice = "$imported ${if (imported == 1) "item" else "items"} imported into the encrypted vault.",
+                        biometricEnabled = biometricEnabled,
+                    )
+                }
+                VaultMutationResult.Locked -> {
+                    clearPendingCsv()
+                    mutableState.value = VaultUiState.Locked(biometricMaterialPresent())
+                }
+                VaultMutationResult.Failed -> updateUnlockedError("CSV import failed. The previous vault is intact.")
+            }
+        }
+    }
+
+    fun cancelCsvImport() = clearPendingCsv()
+
     fun loadRestore(uri: Uri) {
         clearPendingRestore()
+        clearPendingCsv()
         mutableBackupState.value = BackupUiState.Reading
         viewModelScope.launch {
             try {
@@ -428,6 +631,22 @@ class VaultViewModel(application: Application) : AndroidViewModel(application) {
 
     fun toggleIdentityFavorite(itemId: String) = mutate { payload -> VaultMutations.toggleIdentityFavorite(payload, itemId, deviceId()) }
 
+    fun addCategory(name: String) = mutate { payload -> VaultMutations.addCategory(payload, name, deviceId()) }
+
+    fun renameCategory(categoryId: String, name: String) = mutate { payload -> VaultMutations.renameCategory(payload, categoryId, name, deviceId()) }
+
+    fun deleteCategory(categoryId: String) = mutate { payload -> VaultMutations.deleteCategory(payload, categoryId, deviceId()) }
+
+    fun addTag(name: String) = mutate { payload -> VaultMutations.addTag(payload, name, deviceId()) }
+
+    fun renameTag(tagId: String, name: String) = mutate { payload -> VaultMutations.renameTag(payload, tagId, name, deviceId()) }
+
+    fun deleteTag(tagId: String) = mutate { payload -> VaultMutations.deleteTag(payload, tagId, deviceId()) }
+
+    fun setItemOrganization(itemId: String, categoryId: String?, tagIds: List<String>) = mutate { payload ->
+        VaultMutations.setItemOrganization(payload, itemId, categoryId, tagIds, deviceId())
+    }
+
     private fun mutate(notice: String? = null, transform: (VaultPayload) -> VaultPayload) {
         recordUserActivity()
         viewModelScope.launch {
@@ -460,6 +679,7 @@ class VaultViewModel(application: Application) : AndroidViewModel(application) {
         pendingBiometric = null
         AutofillPendingSaveStore.clear()
         clearPendingRestore()
+        clearPendingCsv()
         VaultSessionHolder.lock()
         super.onCleared()
     }
@@ -557,6 +777,11 @@ class VaultViewModel(application: Application) : AndroidViewModel(application) {
         mutableBackupState.value = BackupUiState.Idle
     }
 
+    private fun clearPendingCsv() {
+        pendingCsvRecords = null
+        mutableCsvState.value = CsvUiState.Idle
+    }
+
     private fun updateUnlockedNotice(message: String) {
         val current = mutableState.value as? VaultUiState.Unlocked ?: return
         mutableState.value = current.copy(error = null, notice = message)
@@ -600,6 +825,7 @@ class VaultViewModel(application: Application) : AndroidViewModel(application) {
             secureClipboard.clearOwned()
             AutofillPendingSaveStore.clear()
             clearPendingRestore()
+            clearPendingCsv()
             VaultSessionHolder.lock()
             sessionDeadline.close()
             val message = when (reason) {

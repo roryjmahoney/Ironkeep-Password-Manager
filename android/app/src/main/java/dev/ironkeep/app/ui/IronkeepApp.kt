@@ -2,6 +2,10 @@ package dev.ironkeep.app.ui
 
 import android.content.Context
 import android.content.ContextWrapper
+import android.content.Intent
+import android.net.Uri
+import android.provider.Settings as AndroidSettings
+import android.view.autofill.AutofillManager
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
@@ -18,6 +22,7 @@ import androidx.compose.foundation.selection.selectable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -37,6 +42,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.outlined.ArrowBack
 import androidx.compose.material.icons.outlined.Add
 import androidx.compose.material.icons.outlined.Fingerprint
+import androidx.compose.material.icons.outlined.Folder
 import androidx.compose.material.icons.outlined.Favorite
 import androidx.compose.material.icons.outlined.FavoriteBorder
 import androidx.compose.material.icons.outlined.Key
@@ -50,10 +56,15 @@ import androidx.compose.material.icons.outlined.CreditCard
 import androidx.compose.material.icons.outlined.Description
 import androidx.compose.material.icons.outlined.Person
 import androidx.compose.material.icons.outlined.Timer
+import androidx.compose.material.icons.outlined.Tag
+import androidx.compose.material.icons.outlined.Visibility
+import androidx.compose.material.icons.outlined.VisibilityOff
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.Checkbox
+import androidx.compose.material3.FilterChip
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -84,6 +95,7 @@ import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
+import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.biometric.BiometricManager
@@ -92,6 +104,7 @@ import androidx.core.content.ContextCompat
 import androidx.fragment.app.FragmentActivity
 import dev.ironkeep.app.vault.BiometricPurpose
 import dev.ironkeep.app.vault.BackupUiState
+import dev.ironkeep.app.vault.CsvUiState
 import dev.ironkeep.app.vault.VaultUiState
 import dev.ironkeep.app.vault.VaultViewModel
 import dev.ironkeep.app.vault.model.LoginFields
@@ -110,6 +123,8 @@ import dev.ironkeep.app.vault.model.VaultMutations
 fun IronkeepApp(viewModel: VaultViewModel) {
     val state by viewModel.state.collectAsStateWithLifecycle()
     val backupState by viewModel.backupState.collectAsStateWithLifecycle()
+    val csvState by viewModel.csvState.collectAsStateWithLifecycle()
+    val onboardingRequired by viewModel.onboardingRequired.collectAsStateWithLifecycle()
     val activity = LocalContext.current.findFragmentActivity()
     var legalDocument by remember { mutableStateOf<LegalDocument?>(null) }
     val createBackup = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("application/vnd.ironkeep.vault")) { uri ->
@@ -118,6 +133,23 @@ fun IronkeepApp(viewModel: VaultViewModel) {
     val openBackup = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
         if (uri != null) viewModel.loadRestore(uri)
     }
+    val createCsv = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("text/csv")) { uri ->
+        if (uri != null) viewModel.exportCsv(uri)
+    }
+    val openCsv = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+        if (uri != null) viewModel.loadCsv(uri)
+    }
+    LaunchedEffect(csvState) {
+        if (csvState == CsvUiState.ExportReady) {
+            createCsv.launch("ironkeep-export-${(state as? VaultUiState.Unlocked)?.vault?.revision ?: 1}.csv")
+            viewModel.cancelCsvImport()
+        }
+    }
+    var autofillEnabled by remember { mutableStateOf(activity.getSystemService(AutofillManager::class.java)?.hasEnabledAutofillServices() == true) }
+    val requestAutofill = rememberLauncherForActivityResult(ActivityResultContracts.StartActivityForResult()) {
+        autofillEnabled = activity.getSystemService(AutofillManager::class.java)?.hasEnabledAutofillServices() == true
+    }
+    val openBatterySettings = rememberLauncherForActivityResult(ActivityResultContracts.StartActivityForResult()) {}
     val biometricPrompt = remember(activity, viewModel) {
         BiometricPrompt(
             activity,
@@ -197,6 +229,8 @@ fun IronkeepApp(viewModel: VaultViewModel) {
                 error = current.error,
                 notice = current.notice,
                 biometricEnabled = current.biometricEnabled,
+                autofillEnabled = autofillEnabled,
+                onboardingRequired = onboardingRequired,
                 onAdd = viewModel::addLogin,
                 onEdit = viewModel::editLogin,
                 onDelete = viewModel::deleteLogin,
@@ -213,15 +247,38 @@ fun IronkeepApp(viewModel: VaultViewModel) {
                 onEditIdentity = viewModel::editIdentity,
                 onDeleteIdentity = viewModel::deleteIdentity,
                 onToggleIdentityFavorite = viewModel::toggleIdentityFavorite,
+                onAddCategory = viewModel::addCategory,
+                onRenameCategory = viewModel::renameCategory,
+                onDeleteCategory = viewModel::deleteCategory,
+                onAddTag = viewModel::addTag,
+                onRenameTag = viewModel::renameTag,
+                onDeleteTag = viewModel::deleteTag,
+                onSetItemOrganization = viewModel::setItemOrganization,
                 onEnableBiometric = viewModel::requestBiometricEnrollment,
                 onDisableBiometric = viewModel::disableBiometricUnlock,
                 onUpdateSecuritySettings = viewModel::updateSecuritySettings,
+                onChangeMasterPassword = viewModel::changeMasterPassword,
+                onDeleteVault = viewModel::deleteVault,
+                onChooseAutofillProvider = {
+                    requestAutofill.launch(
+                        Intent(AndroidSettings.ACTION_REQUEST_SET_AUTOFILL_SERVICE).setData(Uri.parse("package:${activity.packageName}")),
+                    )
+                },
+                onOpenBatteryGuidance = {
+                    openBatterySettings.launch(Intent(AndroidSettings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS))
+                },
+                onCompleteOnboarding = viewModel::completeOnboarding,
                 backupState = backupState,
+                csvState = csvState,
                 onCreateBackup = { createBackup.launch("ironkeep-backup-${current.vault.revision}.ikv") },
                 onChooseRestore = { openBackup.launch(arrayOf("application/vnd.ironkeep.vault", "application/json", "application/octet-stream")) },
                 onAuthenticateRestore = viewModel::authenticateRestore,
                 onConfirmRestore = viewModel::confirmRestore,
                 onCancelRestore = viewModel::cancelRestore,
+                onAuthenticateCsvExport = viewModel::authenticateCsvExport,
+                onChooseCsv = { openCsv.launch(arrayOf("text/csv", "text/comma-separated-values", "application/csv")) },
+                onConfirmCsvImport = viewModel::confirmCsvImport,
+                onCancelCsvImport = viewModel::cancelCsvImport,
                 onCopyPassword = viewModel::copyPassword,
                 onLock = viewModel::lock,
                 onPrivacy = { legalDocument = LegalDocument.PRIVACY },
@@ -452,6 +509,8 @@ private fun VaultHome(
     error: String?,
     notice: String?,
     biometricEnabled: Boolean,
+    autofillEnabled: Boolean,
+    onboardingRequired: Boolean,
     onAdd: (LoginFields) -> Unit,
     onEdit: (String, LoginFields) -> Unit,
     onDelete: (String) -> Unit,
@@ -468,15 +527,32 @@ private fun VaultHome(
     onEditIdentity: (String, IdentityFields) -> Unit,
     onDeleteIdentity: (String) -> Unit,
     onToggleIdentityFavorite: (String) -> Unit,
+    onAddCategory: (String) -> Unit,
+    onRenameCategory: (String, String) -> Unit,
+    onDeleteCategory: (String) -> Unit,
+    onAddTag: (String) -> Unit,
+    onRenameTag: (String, String) -> Unit,
+    onDeleteTag: (String) -> Unit,
+    onSetItemOrganization: (String, String?, List<String>) -> Unit,
     onEnableBiometric: () -> Unit,
     onDisableBiometric: () -> Unit,
     onUpdateSecuritySettings: (Int, Int) -> Unit,
+    onChangeMasterPassword: (CharArray, CharArray) -> Unit,
+    onDeleteVault: (CharArray, String) -> Unit,
+    onChooseAutofillProvider: () -> Unit,
+    onOpenBatteryGuidance: () -> Unit,
+    onCompleteOnboarding: () -> Unit,
     backupState: BackupUiState,
+    csvState: CsvUiState,
     onCreateBackup: () -> Unit,
     onChooseRestore: () -> Unit,
     onAuthenticateRestore: (CharArray) -> Unit,
     onConfirmRestore: () -> Unit,
     onCancelRestore: () -> Unit,
+    onAuthenticateCsvExport: (CharArray) -> Unit,
+    onChooseCsv: () -> Unit,
+    onConfirmCsvImport: (Boolean) -> Unit,
+    onCancelCsvImport: () -> Unit,
     onCopyPassword: (String) -> Unit,
     onLock: () -> Unit,
     onPrivacy: () -> Unit,
@@ -494,6 +570,15 @@ private fun VaultHome(
     var deleteTarget by remember { mutableStateOf<VaultItem?>(null) }
     var confirmDisableBiometric by remember { mutableStateOf(false) }
     var showSecuritySettings by remember { mutableStateOf(false) }
+    var showChangeMasterPassword by remember { mutableStateOf(false) }
+    var showOnboarding by remember(onboardingRequired) { mutableStateOf(onboardingRequired) }
+    var showDeleteVault by remember { mutableStateOf(false) }
+    var showCsvExportPassword by remember { mutableStateOf(false) }
+    var showOrganizationManager by remember { mutableStateOf(false) }
+    var organizingItem by remember { mutableStateOf<VaultItem?>(null) }
+    var kindFilter by remember { mutableStateOf<String?>(null) }
+    var categoryFilter by remember { mutableStateOf("all") }
+    var tagFilter by remember { mutableStateOf<String?>(null) }
     var destination by remember { mutableStateOf(VaultDestination.VAULT) }
     val logins = vault.items.filterIsInstance<LoginItem>().filter {
         query.isBlank() || it.title.contains(query, true) || it.username.contains(query, true)
@@ -507,7 +592,16 @@ private fun VaultHome(
     val identities = vault.items.filterIsInstance<IdentityItem>().filter {
         query.isBlank() || listOf(it.title, it.firstName, it.middleName, it.lastName, it.email, it.phone, it.company, it.city, it.country).any { value -> value.contains(query, true) }
     }
-    val visibleItems: List<VaultItem> = (logins + notes + cards + identities).sortedWith(compareByDescending<VaultItem> { it.favorite }.thenBy { it.title.lowercase() })
+    val visibleItems: List<VaultItem> = (logins + notes + cards + identities).filter { item ->
+        (kindFilter == null || when (item) { is LoginItem -> "login"; is SecureNoteItem -> "note"; is CreditCardItem -> "card"; is IdentityItem -> "identity" } == kindFilter) &&
+            (categoryFilter == "all" || (categoryFilter == "none" && item.categoryId == null) || item.categoryId == categoryFilter) &&
+            (tagFilter == null || tagFilter in item.tagIds)
+    }.sortedWith(compareByDescending<VaultItem> { it.favorite }.thenBy { it.title.lowercase() })
+
+    LaunchedEffect(vault.categories, vault.tags) {
+        if (categoryFilter != "all" && categoryFilter != "none" && vault.categories.none { it.id == categoryFilter }) categoryFilter = "all"
+        if (tagFilter != null && vault.tags.none { it.id == tagFilter }) tagFilter = null
+    }
 
     val editing = vault.items.filterIsInstance<LoginItem>().find { it.id == editingId }
     val editingNote = vault.items.filterIsInstance<SecureNoteItem>().find { it.id == editingNoteId }
@@ -602,6 +696,26 @@ private fun VaultHome(
                         singleLine = true,
                         shape = RectangleShape,
                     )
+                    Column(Modifier.fillMaxWidth().padding(horizontal = 16.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                        FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            listOf(null to "All", "login" to "Logins", "note" to "Notes", "card" to "Cards", "identity" to "IDs").forEach { (value, label) ->
+                                FilterChip(selected = kindFilter == value, onClick = { kindFilter = value }, label = { Text(label) })
+                            }
+                        }
+                        FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            FilterChip(selected = categoryFilter == "all", onClick = { categoryFilter = "all" }, label = { Text("All categories") })
+                            FilterChip(selected = categoryFilter == "none", onClick = { categoryFilter = "none" }, label = { Text("No category") })
+                            vault.categories.forEach { category ->
+                                FilterChip(selected = categoryFilter == category.id, onClick = { categoryFilter = category.id }, label = { Text(category.name) })
+                            }
+                        }
+                        if (vault.tags.isNotEmpty()) {
+                            FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                FilterChip(selected = tagFilter == null, onClick = { tagFilter = null }, label = { Text("All tags") })
+                                vault.tags.forEach { tag -> FilterChip(selected = tagFilter == tag.id, onClick = { tagFilter = tag.id }, label = { Text(tag.name) }) }
+                            }
+                        }
+                    }
                     if (vault.items.none { it is LoginItem || it is SecureNoteItem || it is CreditCardItem || it is IdentityItem }) {
                         Column(
                             Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 40.dp),
@@ -702,6 +816,11 @@ private fun VaultHome(
                                             style = MaterialTheme.typography.bodySmall,
                                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                                         )
+                                        val organizationLabel = listOfNotNull(
+                                            vault.categories.find { it.id == item.categoryId }?.name,
+                                            *item.tagIds.mapNotNull { id -> vault.tags.find { it.id == id }?.name }.toTypedArray(),
+                                        ).joinToString(" · ")
+                                        if (organizationLabel.isNotEmpty()) Text(organizationLabel, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.primary)
                                     }
                                     IconButton(onClick = {
                                         when (item) {
@@ -712,6 +831,9 @@ private fun VaultHome(
                                         }
                                     }, modifier = Modifier.size(48.dp)) {
                                         Icon(if (item.favorite) Icons.Outlined.Favorite else Icons.Outlined.FavoriteBorder, contentDescription = if (item.favorite) "Remove ${item.title} from favorites" else "Add ${item.title} to favorites")
+                                    }
+                                    IconButton(onClick = { organizingItem = item }, modifier = Modifier.size(48.dp)) {
+                                        Icon(Icons.Outlined.Tag, contentDescription = "Organize ${item.title}")
                                     }
                                 }
                                 HorizontalDivider(color = MaterialTheme.colorScheme.outline)
@@ -738,6 +860,26 @@ private fun VaultHome(
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                         modifier = Modifier.padding(start = 20.dp, end = 20.dp, bottom = 20.dp),
                     )
+                    HorizontalDivider(color = MaterialTheme.colorScheme.outline)
+                    Row(
+                        Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 12.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Icon(Icons.Outlined.Settings, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
+                        Column(Modifier.weight(1f).padding(horizontal = 12.dp)) {
+                            Text("Android setup guide", style = MaterialTheme.typography.titleSmall)
+                            Text(
+                                "Autofill provider, biometric unlock, and optional battery guidance.",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                        }
+                        OutlinedButton(
+                            onClick = { showOnboarding = true },
+                            shape = RectangleShape,
+                            modifier = Modifier.height(48.dp),
+                        ) { Text("Open") }
+                    }
                     HorizontalDivider(color = MaterialTheme.colorScheme.outline)
                     Row(
                         Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 12.dp),
@@ -779,6 +921,26 @@ private fun VaultHome(
                         ) { Text("Change") }
                     }
                     HorizontalDivider(color = MaterialTheme.colorScheme.outline)
+                    Row(
+                        Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 12.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Icon(Icons.Outlined.Key, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
+                        Column(Modifier.weight(1f).padding(horizontal = 12.dp)) {
+                            Text("Master password", style = MaterialTheme.typography.titleSmall)
+                            Text(
+                                "Change the password that encrypts this local vault.",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                        }
+                        OutlinedButton(
+                            onClick = { showChangeMasterPassword = true },
+                            shape = RectangleShape,
+                            modifier = Modifier.height(48.dp),
+                        ) { Text("Change") }
+                    }
+                    HorizontalDivider(color = MaterialTheme.colorScheme.outline)
                     Column(Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 16.dp)) {
                         Text("Encrypted backups", style = MaterialTheme.typography.titleSmall)
                         Text(
@@ -793,11 +955,53 @@ private fun VaultHome(
                         }
                     }
                     HorizontalDivider(color = MaterialTheme.colorScheme.outline)
+                    Column(Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 16.dp)) {
+                        Text("CSV transfer", style = MaterialTheme.typography.titleSmall)
+                        Text(
+                            "Import Ironkeep or common browser login CSV. CSV is plaintext and can expose secrets.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.padding(top = 4.dp, bottom = 12.dp),
+                        )
+                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            OutlinedButton(onClick = { showCsvExportPassword = true }, shape = RectangleShape, modifier = Modifier.height(48.dp)) { Text("Export CSV") }
+                            OutlinedButton(onClick = onChooseCsv, shape = RectangleShape, modifier = Modifier.height(48.dp)) { Text("Import CSV") }
+                        }
+                    }
+                    HorizontalDivider(color = MaterialTheme.colorScheme.outline)
+                    Row(
+                        Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 12.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Icon(Icons.Outlined.Folder, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
+                        Column(Modifier.weight(1f).padding(horizontal = 12.dp)) {
+                            Text("Categories & tags", style = MaterialTheme.typography.titleSmall)
+                            Text("Create, rename, or delete vault organization labels.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        }
+                        OutlinedButton(onClick = { showOrganizationManager = true }, shape = RectangleShape, modifier = Modifier.height(48.dp)) { Text("Manage") }
+                    }
+                    HorizontalDivider(color = MaterialTheme.colorScheme.outline)
                     LegalLinks(
                         onPrivacy = onPrivacy,
                         onTerms = onTerms,
                         modifier = Modifier.padding(horizontal = 20.dp, vertical = 20.dp),
                     )
+                    HorizontalDivider(color = MaterialTheme.colorScheme.outline)
+                    Column(Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 20.dp)) {
+                        Text("Danger zone", style = MaterialTheme.typography.titleSmall, color = MaterialTheme.colorScheme.error)
+                        Text(
+                            "Permanently delete this device's vault and local recovery snapshot.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.padding(top = 4.dp, bottom = 12.dp),
+                        )
+                        OutlinedButton(
+                            onClick = { showDeleteVault = true },
+                            shape = RectangleShape,
+                            modifier = Modifier.fillMaxWidth().height(48.dp),
+                            colors = ButtonDefaults.outlinedButtonColors(contentColor = MaterialTheme.colorScheme.error),
+                        ) { Text("Delete local vault") }
+                    }
                     HorizontalDivider(color = MaterialTheme.colorScheme.outline)
                 }
             }
@@ -866,6 +1070,69 @@ private fun VaultHome(
             },
         )
     }
+    if (showChangeMasterPassword) {
+        ChangeMasterPasswordDialog(
+            onDismiss = { showChangeMasterPassword = false },
+            onChange = { currentPassword, newPassword ->
+                showChangeMasterPassword = false
+                onChangeMasterPassword(currentPassword, newPassword)
+            },
+        )
+    }
+    if (showOnboarding) {
+        AndroidSetupDialog(
+            biometricEnabled = biometricEnabled,
+            autofillEnabled = autofillEnabled,
+            onChooseAutofillProvider = onChooseAutofillProvider,
+            onEnableBiometric = onEnableBiometric,
+            onOpenBatteryGuidance = onOpenBatteryGuidance,
+            onDone = {
+                showOnboarding = false
+                onCompleteOnboarding()
+            },
+        )
+    }
+    if (showDeleteVault) {
+        DeleteVaultDialog(
+            onDismiss = { showDeleteVault = false },
+            onDelete = { masterPassword, confirmation ->
+                showDeleteVault = false
+                onDeleteVault(masterPassword, confirmation)
+            },
+        )
+    }
+    if (showCsvExportPassword) {
+        CsvExportPasswordDialog(
+            onDismiss = { showCsvExportPassword = false },
+            onSubmit = { password ->
+                showCsvExportPassword = false
+                onAuthenticateCsvExport(password)
+            },
+        )
+    }
+    organizingItem?.let { item ->
+        ItemOrganizationDialog(
+            vault = vault,
+            item = item,
+            onDismiss = { organizingItem = null },
+            onSave = { categoryId, tagIds ->
+                organizingItem = null
+                onSetItemOrganization(item.id, categoryId, tagIds)
+            },
+        )
+    }
+    if (showOrganizationManager) {
+        OrganizationManagerDialog(
+            vault = vault,
+            onDismiss = { showOrganizationManager = false },
+            onAddCategory = onAddCategory,
+            onRenameCategory = onRenameCategory,
+            onDeleteCategory = onDeleteCategory,
+            onAddTag = onAddTag,
+            onRenameTag = onRenameTag,
+            onDeleteTag = onDeleteTag,
+        )
+    }
     when (backupState) {
         BackupUiState.Idle -> Unit
         BackupUiState.Reading -> AlertDialog(
@@ -876,6 +1143,17 @@ private fun VaultHome(
         )
         BackupUiState.PasswordRequired -> RestorePasswordDialog(onCancelRestore, onAuthenticateRestore)
         is BackupUiState.Preview -> RestorePreviewDialog(backupState.details, onCancelRestore, onConfirmRestore)
+    }
+    when (csvState) {
+        CsvUiState.Idle -> Unit
+        CsvUiState.ExportReady -> Unit
+        CsvUiState.Reading -> AlertDialog(
+            onDismissRequest = {},
+            title = { Text("Checking CSV") },
+            text = { Row(verticalAlignment = Alignment.CenterVertically) { CircularProgressIndicator(Modifier.size(24.dp)); Text("Parsing locally…", modifier = Modifier.padding(start = 12.dp)) } },
+            confirmButton = {},
+        )
+        is CsvUiState.Preview -> CsvPreviewDialog(csvState.details, onCancelCsvImport, onConfirmCsvImport)
     }
 }
 
@@ -904,6 +1182,30 @@ private fun RestorePasswordDialog(onCancel: () -> Unit, onSubmit: (CharArray) ->
 }
 
 @Composable
+private fun CsvExportPasswordDialog(onDismiss: () -> Unit, onSubmit: (CharArray) -> Unit) {
+    var password by remember { mutableStateOf("") }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Export plaintext CSV?") },
+        text = {
+            Column {
+                Text("CSV contains unencrypted secrets. Enter the current master password, then store the file securely and delete it when finished.")
+                OutlinedTextField(
+                    value = password,
+                    onValueChange = { password = it },
+                    label = { Text("Master password") },
+                    visualTransformation = PasswordVisualTransformation(),
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth().padding(top = 12.dp),
+                )
+            }
+        },
+        confirmButton = { Button(onClick = { onSubmit(password.toCharArray()); password = "" }, enabled = password.isNotEmpty(), shape = RectangleShape) { Text("Continue") } },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
+    )
+}
+
+@Composable
 private fun RestorePreviewDialog(details: dev.ironkeep.app.vault.backup.RestorePreview, onCancel: () -> Unit, onConfirm: () -> Unit) {
     AlertDialog(
         onDismissRequest = onCancel,
@@ -920,6 +1222,146 @@ private fun RestorePreviewDialog(details: dev.ironkeep.app.vault.backup.RestoreP
         confirmButton = { Button(onClick = onConfirm, shape = RectangleShape) { Text("Restore") } },
         dismissButton = { TextButton(onClick = onCancel) { Text("Cancel") } },
     )
+}
+
+@Composable
+private fun CsvPreviewDialog(
+    details: dev.ironkeep.app.vault.csv.CsvPreview,
+    onCancel: () -> Unit,
+    onConfirm: (Boolean) -> Unit,
+) {
+    AlertDialog(
+        onDismissRequest = onCancel,
+        title = { Text("Import CSV?") },
+        text = {
+            Column {
+                Text("${details.totalRows} rows")
+                Text("${details.validRows} valid")
+                Text("${details.duplicateRows} likely duplicates")
+                Text("${details.invalidRows} invalid")
+                Text("Valid rows are committed to the encrypted vault in one write.", modifier = Modifier.padding(top = 12.dp))
+            }
+        },
+        confirmButton = { Button(onClick = { onConfirm(false) }, shape = RectangleShape) { Text("Import, skip duplicates") } },
+        dismissButton = {
+            Row {
+                if (details.duplicateRows > 0) TextButton(onClick = { onConfirm(true) }) { Text("Import all") }
+                TextButton(onClick = onCancel) { Text("Cancel") }
+            }
+        },
+    )
+}
+
+@Composable
+private fun ItemOrganizationDialog(
+    vault: VaultPayload,
+    item: VaultItem,
+    onDismiss: () -> Unit,
+    onSave: (String?, List<String>) -> Unit,
+) {
+    var categoryId by remember(item.id) { mutableStateOf(item.categoryId) }
+    var tagIds by remember(item.id) { mutableStateOf(item.tagIds) }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Organize ${item.title}") },
+        text = {
+            Column(Modifier.verticalScroll(rememberScrollState())) {
+                Text("Category", style = MaterialTheme.typography.titleSmall)
+                listOf(null to "No category") .plus(vault.categories.map { it.id to it.name }).forEach { (id, name) ->
+                    Row(
+                        Modifier.fillMaxWidth().height(48.dp).selectable(selected = categoryId == id, onClick = { categoryId = id }, role = Role.RadioButton),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) { RadioButton(selected = categoryId == id, onClick = null); Text(name, modifier = Modifier.padding(start = 8.dp)) }
+                }
+                Text("Tags", style = MaterialTheme.typography.titleSmall, modifier = Modifier.padding(top = 16.dp))
+                if (vault.tags.isEmpty()) Text("No tags yet. Create them in Settings.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                vault.tags.forEach { tag ->
+                    Row(Modifier.fillMaxWidth().height(48.dp).clickable {
+                        tagIds = if (tag.id in tagIds) tagIds - tag.id else tagIds + tag.id
+                    }, verticalAlignment = Alignment.CenterVertically) {
+                        Checkbox(checked = tag.id in tagIds, onCheckedChange = null)
+                        Text(tag.name, modifier = Modifier.padding(start = 8.dp))
+                    }
+                }
+            }
+        },
+        confirmButton = { Button(onClick = { onSave(categoryId, tagIds) }, shape = RectangleShape) { Text("Save") } },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
+    )
+}
+
+private enum class OrganizationKind { CATEGORY, TAG }
+
+@Composable
+private fun OrganizationManagerDialog(
+    vault: VaultPayload,
+    onDismiss: () -> Unit,
+    onAddCategory: (String) -> Unit,
+    onRenameCategory: (String, String) -> Unit,
+    onDeleteCategory: (String) -> Unit,
+    onAddTag: (String) -> Unit,
+    onRenameTag: (String, String) -> Unit,
+    onDeleteTag: (String) -> Unit,
+) {
+    var kind by remember { mutableStateOf(OrganizationKind.CATEGORY) }
+    var editingId by remember { mutableStateOf<String?>(null) }
+    var name by remember { mutableStateOf("") }
+    var deleteTarget by remember { mutableStateOf<Pair<String, String>?>(null) }
+    val entries = if (kind == OrganizationKind.CATEGORY) vault.categories.map { it.id to it.name } else vault.tags.map { it.id to it.name }
+
+    fun save() {
+        if (name.isBlank()) return
+        val id = editingId
+        if (kind == OrganizationKind.CATEGORY) {
+            if (id == null) onAddCategory(name) else onRenameCategory(id, name)
+        } else {
+            if (id == null) onAddTag(name) else onRenameTag(id, name)
+        }
+        editingId = null
+        name = ""
+    }
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Categories & tags") },
+        text = {
+            Column(Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    FilterChip(selected = kind == OrganizationKind.CATEGORY, onClick = { kind = OrganizationKind.CATEGORY; editingId = null; name = "" }, label = { Text("Categories") })
+                    FilterChip(selected = kind == OrganizationKind.TAG, onClick = { kind = OrganizationKind.TAG; editingId = null; name = "" }, label = { Text("Tags") })
+                }
+                OutlinedTextField(value = name, onValueChange = { name = it }, label = { Text(if (editingId == null) "New name" else "Rename") }, singleLine = true, modifier = Modifier.fillMaxWidth())
+                Button(onClick = ::save, enabled = name.isNotBlank(), shape = RectangleShape, modifier = Modifier.fillMaxWidth().height(48.dp)) { Text(if (editingId == null) "Add" else "Save rename") }
+                entries.forEach { (id, entryName) ->
+                    Row(Modifier.fillMaxWidth().border(1.dp, MaterialTheme.colorScheme.outline).padding(start = 12.dp), verticalAlignment = Alignment.CenterVertically) {
+                        Text(entryName, modifier = Modifier.weight(1f), style = MaterialTheme.typography.bodyMedium)
+                        TextButton(onClick = { editingId = id; name = entryName }, modifier = Modifier.height(48.dp)) { Text("Rename") }
+                        IconButton(onClick = { deleteTarget = id to entryName }, modifier = Modifier.size(48.dp)) { Icon(Icons.Outlined.Delete, contentDescription = "Delete $entryName") }
+                    }
+                }
+            }
+        },
+        confirmButton = { Button(onClick = onDismiss, shape = RectangleShape) { Text("Done") } },
+    )
+
+    deleteTarget?.let { (id, entryName) ->
+        AlertDialog(
+            onDismissRequest = { deleteTarget = null },
+            title = { Text("Delete $entryName?") },
+            text = { Text("Items keep their data. This ${if (kind == OrganizationKind.CATEGORY) "category" else "tag"} assignment will be removed from affected items.") },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        if (kind == OrganizationKind.CATEGORY) onDeleteCategory(id) else onDeleteTag(id)
+                        deleteTarget = null
+                    },
+                    shape = RectangleShape,
+                    colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error, contentColor = MaterialTheme.colorScheme.onError),
+                ) { Text("Delete") }
+            },
+            dismissButton = { TextButton(onClick = { deleteTarget = null }) { Text("Cancel") } },
+        )
+    }
 }
 
 @Composable
@@ -973,6 +1415,176 @@ private fun SecuritySettingsDialog(
             }
         },
         confirmButton = { Button(onClick = { onSave(autoLockMinutes, clipboardSeconds) }, shape = RectangleShape) { Text("Save settings") } },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
+    )
+}
+
+@Composable
+private fun ChangeMasterPasswordDialog(
+    onDismiss: () -> Unit,
+    onChange: (CharArray, CharArray) -> Unit,
+) {
+    var currentPassword by remember { mutableStateOf("") }
+    var newPassword by remember { mutableStateOf("") }
+    var confirmPassword by remember { mutableStateOf("") }
+    var passwordsVisible by remember { mutableStateOf(false) }
+    var error by remember { mutableStateOf<String?>(null) }
+    val transformation = if (passwordsVisible) VisualTransformation.None else PasswordVisualTransformation()
+
+    fun submit() {
+        error = when {
+            newPassword.length < 12 -> "New master password must be at least 12 characters."
+            newPassword != confirmPassword -> "New master passwords do not match."
+            currentPassword == newPassword -> "Choose a different master password."
+            else -> null
+        }
+        if (error != null) return
+        onChange(currentPassword.toCharArray(), newPassword.toCharArray())
+        currentPassword = ""
+        newPassword = ""
+        confirmPassword = ""
+    }
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Change master password") },
+        text = {
+            Column(Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                Text("This re-encrypts the local vault. Other devices and backups keep their existing password until updated separately.")
+                OutlinedTextField(
+                    value = currentPassword,
+                    onValueChange = { currentPassword = it; error = null },
+                    label = { Text("Current master password") },
+                    visualTransformation = transformation,
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth(),
+                )
+                OutlinedTextField(
+                    value = newPassword,
+                    onValueChange = { newPassword = it; error = null },
+                    label = { Text("New master password") },
+                    supportingText = { Text("At least 12 characters. Ironkeep cannot recover it.") },
+                    visualTransformation = transformation,
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth(),
+                )
+                OutlinedTextField(
+                    value = confirmPassword,
+                    onValueChange = { confirmPassword = it; error = null },
+                    label = { Text("Confirm new master password") },
+                    visualTransformation = transformation,
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth(),
+                )
+                TextButton(onClick = { passwordsVisible = !passwordsVisible }, modifier = Modifier.height(48.dp)) {
+                    Icon(if (passwordsVisible) Icons.Outlined.VisibilityOff else Icons.Outlined.Visibility, contentDescription = null)
+                    Spacer(Modifier.size(8.dp))
+                    Text(if (passwordsVisible) "Hide passwords" else "Show passwords")
+                }
+                error?.let { Text(it, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall) }
+            }
+        },
+        confirmButton = { Button(onClick = ::submit, shape = RectangleShape) { Text("Change password") } },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
+    )
+}
+
+@Composable
+private fun AndroidSetupDialog(
+    biometricEnabled: Boolean,
+    autofillEnabled: Boolean,
+    onChooseAutofillProvider: () -> Unit,
+    onEnableBiometric: () -> Unit,
+    onOpenBatteryGuidance: () -> Unit,
+    onDone: () -> Unit,
+) {
+    AlertDialog(
+        onDismissRequest = onDone,
+        title = { Text("Set up Ironkeep on Android") },
+        text = {
+            Column(Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(16.dp)) {
+                Text("Complete these local device settings. You can reopen this guide from Settings.")
+                SetupAction(
+                    title = "1. Choose Ironkeep for Autofill",
+                    body = if (autofillEnabled) "Ironkeep is selected as an Autofill provider." else "Android will show its trusted system picker. Select Ironkeep to fill logins and payment cards.",
+                    action = if (autofillEnabled) "Selected" else "Open picker",
+                    enabled = !autofillEnabled,
+                    onClick = onChooseAutofillProvider,
+                )
+                SetupAction(
+                    title = "2. Biometric unlock",
+                    body = if (biometricEnabled) "Enabled with Android Keystore on this device." else "Optional. Require a strong biometric whenever the protected vault key is unwrapped.",
+                    action = if (biometricEnabled) "Enabled" else "Enable",
+                    enabled = !biometricEnabled,
+                    onClick = onEnableBiometric,
+                )
+                SetupAction(
+                    title = "3. Battery guidance",
+                    body = "Optional. If Autofill stops appearing, review battery optimization for Ironkeep. Do not disable it unless needed.",
+                    action = "Review settings",
+                    onClick = onOpenBatteryGuidance,
+                )
+            }
+        },
+        confirmButton = { Button(onClick = onDone, shape = RectangleShape) { Text("Done") } },
+    )
+}
+
+@Composable
+private fun SetupAction(
+    title: String,
+    body: String,
+    action: String,
+    enabled: Boolean = true,
+    onClick: () -> Unit,
+) {
+    Column {
+        Text(title, style = MaterialTheme.typography.titleSmall)
+        Text(body, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(top = 4.dp))
+        OutlinedButton(onClick = onClick, enabled = enabled, shape = RectangleShape, modifier = Modifier.fillMaxWidth().height(48.dp).padding(top = 8.dp)) {
+            Text(action)
+        }
+    }
+}
+
+@Composable
+private fun DeleteVaultDialog(
+    onDismiss: () -> Unit,
+    onDelete: (CharArray, String) -> Unit,
+) {
+    var masterPassword by remember { mutableStateOf("") }
+    var confirmation by remember { mutableStateOf("") }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Delete local vault?") },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                Text("This permanently removes the encrypted vault and local recovery snapshot from this device. Export a backup first if needed.")
+                OutlinedTextField(
+                    value = masterPassword,
+                    onValueChange = { masterPassword = it },
+                    label = { Text("Master password") },
+                    visualTransformation = PasswordVisualTransformation(),
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth(),
+                )
+                OutlinedTextField(
+                    value = confirmation,
+                    onValueChange = { confirmation = it },
+                    label = { Text("Type DELETE") },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth(),
+                )
+            }
+        },
+        confirmButton = {
+            Button(
+                onClick = { onDelete(masterPassword.toCharArray(), confirmation); masterPassword = "" },
+                enabled = masterPassword.isNotEmpty() && confirmation == "DELETE",
+                shape = RectangleShape,
+                colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error, contentColor = MaterialTheme.colorScheme.onError),
+            ) { Text("Delete permanently") }
+        },
         dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
     )
 }

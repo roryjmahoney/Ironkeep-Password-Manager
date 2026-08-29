@@ -11,6 +11,46 @@ import org.junit.Test
 
 class VaultCryptoTest {
     @Test
+    fun changesMasterPasswordWithoutChangingVaultData() {
+        val crypto = VaultCrypto()
+        val payload = VaultPayload.empty("Test", "device-a")
+        val created = crypto.encryptNew("correct horse battery staple".toCharArray(), payload, KdfProfile(memoryKiB = 19 * 1024, iterations = 2, parallelism = 1))
+        val changed = crypto.changeMasterPassword(
+            created.session,
+            "correct horse battery staple".toCharArray(),
+            "new correct horse battery staple".toCharArray(),
+            KdfProfile(memoryKiB = 19 * 1024, iterations = 2, parallelism = 1),
+        )
+
+        assertThrows(VaultAuthenticationException::class.java) {
+            crypto.unlock("correct horse battery staple".toCharArray(), changed)
+        }
+        val reopened = crypto.unlock("new correct horse battery staple".toCharArray(), changed)
+        assertEquals(payload, reopened.payload)
+        reopened.close()
+        created.session.close()
+    }
+
+    @Test
+    fun rejectsIncorrectCurrentPasswordDuringChange() {
+        val crypto = VaultCrypto()
+        val created = crypto.encryptNew(
+            "correct horse battery staple".toCharArray(),
+            VaultPayload.empty("Test", "device-a"),
+            KdfProfile(memoryKiB = 19 * 1024, iterations = 2, parallelism = 1),
+        )
+        assertThrows(VaultAuthenticationException::class.java) {
+            crypto.changeMasterPassword(
+                created.session,
+                "incorrect password".toCharArray(),
+                "new correct horse battery staple".toCharArray(),
+                KdfProfile(memoryKiB = 19 * 1024, iterations = 2, parallelism = 1),
+            )
+        }
+        created.session.close()
+    }
+
+    @Test
     fun decryptsSharedTypescriptVector() {
         val crypto = VaultCrypto()
         val vector = requireNotNull(javaClass.classLoader?.getResourceAsStream("vault-v1.json"))

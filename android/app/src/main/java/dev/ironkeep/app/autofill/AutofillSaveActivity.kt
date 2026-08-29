@@ -19,6 +19,7 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.Description
+import androidx.compose.material.icons.outlined.CreditCard
 import androidx.compose.material.icons.outlined.Key
 import androidx.compose.material.icons.outlined.Person
 import androidx.compose.material.icons.outlined.Security
@@ -48,6 +49,7 @@ import androidx.fragment.app.FragmentActivity
 import dev.ironkeep.app.ui.theme.IronkeepTheme
 import dev.ironkeep.app.MainActivity
 import dev.ironkeep.app.vault.model.LoginItem
+import dev.ironkeep.app.vault.model.CreditCardItem
 import dev.ironkeep.app.vault.model.VaultMutations
 import dev.ironkeep.app.vault.session.DeviceIdProvider
 import dev.ironkeep.app.vault.session.VaultMutationCoordinator
@@ -76,7 +78,7 @@ class AutofillSaveActivity : FragmentActivity() {
             activity = this,
             onUnlocked = {
                 unlockedForSave = true
-                unlockMessage = "Vault unlocked. Choose how to save this login."
+                unlockMessage = "Vault unlocked. Choose how to save this item."
             },
             onMessage = { unlockMessage = it },
         )
@@ -87,7 +89,12 @@ class AutofillSaveActivity : FragmentActivity() {
                 val candidate = AutofillPendingSaveStore.candidate(pendingToken)
                 val session = VaultSessionHolder.sessionOrNull()
                 val choices = if (candidate != null && session?.payload?.vaultId == candidate.vaultId) {
-                    AutofillSavePlanner.matchingLogins(session.payload, candidate).map { LoginChoice(it.id, it.title, it.username) }
+                    when (candidate) {
+                        is AutofillCredentialCandidate -> AutofillSavePlanner.matchingLogins(session.payload, candidate)
+                            .map { SaveChoice(it.id, it.title, it.username.ifBlank { "no username" }) }
+                        is AutofillCreditCardCandidate -> AutofillCreditCardSavePlanner.matchingCards(session.payload, candidate)
+                            .map { SaveChoice(it.id, it.title, "•••• ${it.number.takeLast(4)}") }
+                    }
                 } else emptyList()
                 AutofillSaveScreen(
                     summary = summary,
@@ -134,19 +141,32 @@ class AutofillSaveActivity : FragmentActivity() {
         val candidate = AutofillPendingSaveStore.candidate(pendingToken) ?: return "This save request expired. Submit the form again."
         val session = VaultSessionHolder.sessionOrNull()
         if (session == null || session.payload.vaultId != candidate.vaultId) {
-            return "Ironkeep locked before the login was saved. Unlock with your fingerprint and try again."
+            return "Ironkeep locked before the item was saved. Unlock with your fingerprint and try again."
         }
-        if (AutofillSavePlanner.isUnchanged(session.payload, candidate)) {
+        val unchanged = when (candidate) {
+            is AutofillCredentialCandidate -> AutofillSavePlanner.isUnchanged(session.payload, candidate)
+            is AutofillCreditCardCandidate -> AutofillCreditCardSavePlanner.isUnchanged(session.payload, candidate)
+        }
+        if (unchanged) {
             AutofillPendingSaveStore.discard(pendingToken)
             return null
         }
         val result = mutationCoordinator.mutate { payload ->
-            if (updateItemId == null) {
-                VaultMutations.addLogin(payload, AutofillSavePlanner.createFields(candidate), deviceIdProvider.id())
-            } else {
-                val existing = payload.items.filterIsInstance<LoginItem>().find { it.id == updateItemId }
-                    ?: throw NoSuchElementException("Login not found")
-                VaultMutations.editLogin(payload, existing.id, AutofillSavePlanner.updateFields(candidate, existing), deviceIdProvider.id())
+            when (candidate) {
+                is AutofillCredentialCandidate -> if (updateItemId == null) {
+                    VaultMutations.addLogin(payload, AutofillSavePlanner.createFields(candidate), deviceIdProvider.id())
+                } else {
+                    val existing = payload.items.filterIsInstance<LoginItem>().find { it.id == updateItemId }
+                        ?: throw NoSuchElementException("Login not found")
+                    VaultMutations.editLogin(payload, existing.id, AutofillSavePlanner.updateFields(candidate, existing), deviceIdProvider.id())
+                }
+                is AutofillCreditCardCandidate -> if (updateItemId == null) {
+                    VaultMutations.addCreditCard(payload, AutofillCreditCardSavePlanner.createFields(candidate), deviceIdProvider.id())
+                } else {
+                    val existing = payload.items.filterIsInstance<CreditCardItem>().find { it.id == updateItemId }
+                        ?: throw NoSuchElementException("Credit card not found")
+                    VaultMutations.editCreditCard(payload, existing.id, AutofillCreditCardSavePlanner.updateFields(candidate, existing), deviceIdProvider.id())
+                }
             }
         }
         return when (result) {
@@ -156,7 +176,7 @@ class AutofillSaveActivity : FragmentActivity() {
             }
 
             VaultMutationResult.Locked -> {
-                "Ironkeep locked before the login was saved. Unlock with your fingerprint and try again."
+                "Ironkeep locked before the item was saved. Unlock with your fingerprint and try again."
             }
 
             VaultMutationResult.Failed -> "The encrypted vault could not be updated. Your previous vault is intact; try again."
@@ -168,12 +188,12 @@ class AutofillSaveActivity : FragmentActivity() {
     }
 }
 
-private data class LoginChoice(val id: String, val title: String, val username: String)
+private data class SaveChoice(val id: String, val title: String, val subtitle: String)
 
 @Composable
 private fun AutofillSaveScreen(
     summary: AutofillCandidateSummary?,
-    choices: List<LoginChoice>,
+    choices: List<SaveChoice>,
     vaultAvailable: Boolean,
     unlockMessage: String?,
     onUnlock: () -> Unit,
@@ -211,12 +231,12 @@ private fun AutofillSaveScreen(
         ) {
             Text("AUTOFILL CONFIRMATION", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.primary)
             Text(
-                if (saved) "Login saved." else "Save this login?",
+                if (saved) "${summary?.kind?.replaceFirstChar(Char::uppercase)} saved." else "Save this ${summary?.kind ?: "item"}?",
                 style = MaterialTheme.typography.headlineLarge,
                 modifier = Modifier.padding(top = 8.dp).semantics { heading() },
             )
             Text(
-                "Choose exactly what Ironkeep should do. The password is hidden and is never placed in this screen or Intent.",
+                "Choose exactly what Ironkeep should do. Sensitive values stay hidden and are never placed in this screen or Intent.",
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 modifier = Modifier.padding(top = 8.dp, bottom = 24.dp),
@@ -227,14 +247,14 @@ private fun AutofillSaveScreen(
                 HorizontalDivider(color = MaterialTheme.colorScheme.outline)
                 DetailRow(Icons.Outlined.Description, "Proposed title", summary.title)
                 HorizontalDivider(color = MaterialTheme.colorScheme.outline)
-                DetailRow(Icons.Outlined.Person, "Account", summary.username.ifBlank { "No username detected" })
+                DetailRow(if (summary.kind == "payment card") Icons.Outlined.CreditCard else Icons.Outlined.Person, summary.primaryLabel, summary.primaryValue.ifBlank { "Not detected" })
                 HorizontalDivider(color = MaterialTheme.colorScheme.outline)
-                DetailRow(Icons.Outlined.Key, "Password", "Hidden until encrypted save")
+                DetailRow(Icons.Outlined.Key, "Sensitive values", "Hidden until encrypted save")
             }
 
             if (!vaultAvailable) {
                 Text(
-                    error ?: unlockMessage ?: "Ironkeep is locked. Unlock it to review this login before saving.",
+                    error ?: unlockMessage ?: "Ironkeep is locked. Unlock it to review this item before saving.",
                     color = MaterialTheme.colorScheme.error,
                     style = MaterialTheme.typography.bodyMedium,
                     modifier = Modifier.padding(top = 20.dp),
@@ -253,7 +273,7 @@ private fun AutofillSaveScreen(
                 }
             } else if (!saved) {
                 if (choices.isNotEmpty()) {
-                    Text("UPDATE AN EXISTING LOGIN", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.primary, modifier = Modifier.padding(top = 24.dp, bottom = 8.dp))
+                    Text("UPDATE AN EXISTING ${summary?.kind?.uppercase() ?: "ITEM"}", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.primary, modifier = Modifier.padding(top = 24.dp, bottom = 8.dp))
                     choices.forEach { choice ->
                         OutlinedButton(
                             onClick = { runSave { onUpdate(choice.id) } },
@@ -261,7 +281,7 @@ private fun AutofillSaveScreen(
                             shape = RectangleShape,
                             modifier = Modifier.fillMaxWidth().height(52.dp).padding(bottom = 4.dp),
                         ) {
-                            Text("Update ${choice.title} — ${choice.username.ifBlank { "no username" }}")
+                            Text("Update ${choice.title} — ${choice.subtitle}")
                         }
                     }
                 }
@@ -272,7 +292,7 @@ private fun AutofillSaveScreen(
                     modifier = Modifier.fillMaxWidth().height(52.dp).padding(top = 8.dp),
                 ) {
                     if (saving) CircularProgressIndicator(Modifier.size(20.dp), strokeWidth = 2.dp)
-                    else Text("Save as new login")
+                    else Text("Save as new ${summary?.kind ?: "item"}")
                 }
                 TextButton(onClick = onNotNow, enabled = !saving, modifier = Modifier.align(Alignment.CenterHorizontally).height(48.dp)) {
                     Text("Not now")
@@ -285,15 +305,15 @@ private fun AutofillSaveScreen(
     if (confirmDuplicate) {
         AlertDialog(
             onDismissRequest = { confirmDuplicate = false },
-            title = { Text("Save another login?") },
-            text = { Text("Ironkeep already has one or more accounts for this exact target. Saving as new will not overwrite them.") },
+            title = { Text("Save another ${summary?.kind ?: "item"}?") },
+            text = { Text("Ironkeep already has a likely match. Saving as new will not overwrite it.") },
             confirmButton = {
                 Button(
                     onClick = { confirmDuplicate = false; runSave(onSaveNew) },
                     shape = RectangleShape,
                 ) { Text("Save another") }
             },
-            dismissButton = { TextButton(onClick = { confirmDuplicate = false }) { Text("Choose an account") } },
+            dismissButton = { TextButton(onClick = { confirmDuplicate = false }) { Text("Choose existing") } },
         )
     }
 }

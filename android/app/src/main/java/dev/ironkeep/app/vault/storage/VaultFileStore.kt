@@ -39,6 +39,11 @@ class VaultFileStore(context: Context, private val json: Json) : VaultStore {
         writeAtomic(recoveryFile, vault)
     }
 
+    fun deleteAll() {
+        file.delete()
+        recoveryFile.delete()
+    }
+
     private fun writeAtomic(target: AtomicFile, vault: VaultFile) {
         val bytes = json.encodeToString(VaultFile.serializer(), vault).encodeToByteArray()
         val stream = target.startWrite()

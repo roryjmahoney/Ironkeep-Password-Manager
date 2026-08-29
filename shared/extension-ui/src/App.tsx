@@ -4,6 +4,7 @@ import {
   Copy,
   CreditCard,
   FileText,
+  Folder,
   Fingerprint,
   Heart,
   KeyRound,
@@ -13,7 +14,7 @@ import {
   Trash2,
   RefreshCw,
   Settings,
-  ShieldCheck,
+  Tag,
   UserRound,
 } from "lucide-react";
 import { useCallback, useDeferredValue, useEffect, useMemo, useRef, useState, type ChangeEvent, type FormEvent, type ReactNode } from "react";
@@ -24,7 +25,7 @@ import { PasswordInput } from "./components/ui/PasswordInput.js";
 import { SearchInput } from "./components/ui/SearchInput.js";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "./components/ui/Tabs.js";
 import { LEGAL_DOCUMENTS, parseLegalMarkdown, type LegalDocumentKind } from "./legal.js";
-import type { ExtensionRequest, ExtensionResponse, PublicCreditCard, PublicIdentity, PublicLogin, PublicSecureNote, PublicSecuritySettings, PublicVaultItem } from "./runtime/types.js";
+import type { ExtensionRequest, ExtensionResponse, PublicCreditCard, PublicCsvPreview, PublicIdentity, PublicLogin, PublicOrganization, PublicRestorePreview, PublicSecureNote, PublicSecuritySettings, PublicVaultItem } from "./runtime/types.js";
 
 type ViewState = "loading" | "empty" | "locked" | "unlocked";
 
@@ -509,14 +510,26 @@ type VaultEditor =
   | { kind: "creditCard"; item: PublicCreditCard | null }
   | { kind: "identity"; item: PublicIdentity | null };
 
-function VaultList({ items, onChanged }: { items: PublicVaultItem[]; onChanged: () => void }) {
+function VaultList({ items, organization, onChanged }: { items: PublicVaultItem[]; organization: PublicOrganization; onChanged: () => void }) {
   const [query, setQuery] = useState("");
   const [editor, setEditor] = useState<VaultEditor | null>(null);
+  const [organizing, setOrganizing] = useState<PublicVaultItem | null>(null);
+  const [managingOrganization, setManagingOrganization] = useState(false);
+  const [selectedCategoryId, setSelectedCategoryId] = useState("");
+  const [selectedTagIds, setSelectedTagIds] = useState<string[]>([]);
+  const [kindFilter, setKindFilter] = useState("all");
+  const [categoryFilter, setCategoryFilter] = useState("all");
+  const [tagFilter, setTagFilter] = useState("all");
   const deferredQuery = useDeferredValue(query.trim().toLowerCase());
   const searchRef = useRef<HTMLInputElement>(null);
   const filtered = useMemo(
-    () => items.filter((item) => `${item.title} ${item.subtitle}`.toLowerCase().includes(deferredQuery)),
-    [deferredQuery, items],
+    () => items.filter((item) =>
+      `${item.title} ${item.subtitle}`.toLowerCase().includes(deferredQuery) &&
+      (kindFilter === "all" || item.kind === kindFilter) &&
+      (categoryFilter === "all" || (categoryFilter === "none" ? !item.categoryId : item.categoryId === categoryFilter)) &&
+      (tagFilter === "all" || item.tagIds.includes(tagFilter)),
+    ),
+    [categoryFilter, deferredQuery, items, kindFilter, tagFilter],
   );
 
   useEffect(() => {
@@ -529,6 +542,11 @@ function VaultList({ items, onChanged }: { items: PublicVaultItem[]; onChanged: 
     window.addEventListener("keydown", handleShortcut);
     return () => window.removeEventListener("keydown", handleShortcut);
   }, []);
+
+  useEffect(() => {
+    if (categoryFilter !== "all" && categoryFilter !== "none" && !organization.categories.some((entry) => entry.id === categoryFilter)) setCategoryFilter("all");
+    if (tagFilter !== "all" && !organization.tags.some((entry) => entry.id === tagFilter)) setTagFilter("all");
+  }, [categoryFilter, organization, tagFilter]);
 
   async function edit(item: PublicVaultItem) {
     if (item.kind === "login") {
@@ -558,15 +576,62 @@ function VaultList({ items, onChanged }: { items: PublicVaultItem[]; onChanged: 
     if (response.ok) onChanged();
   }
 
+  function organize(item: PublicVaultItem) {
+    setSelectedCategoryId(item.categoryId ?? "");
+    setSelectedTagIds(item.tagIds);
+    setOrganizing(item);
+  }
+
+  async function saveOrganization() {
+    if (!organizing) return;
+    const response = await send({
+      type: "SET_ITEM_ORGANIZATION",
+      itemId: organizing.id,
+      ...(selectedCategoryId ? { categoryId: selectedCategoryId } : {}),
+      tagIds: selectedTagIds,
+    });
+    if (response.ok) {
+      setOrganizing(null);
+      onChanged();
+    }
+  }
+
   if (editor?.kind === "login") return <LoginEditor item={editor.item} onCancel={() => setEditor(null)} onSaved={() => { setEditor(null); onChanged(); }} />;
   if (editor?.kind === "secureNote") return <SecureNoteEditor item={editor.item} onCancel={() => setEditor(null)} onSaved={() => { setEditor(null); onChanged(); }} />;
   if (editor?.kind === "creditCard") return <CreditCardEditor item={editor.item} onCancel={() => setEditor(null)} onSaved={() => { setEditor(null); onChanged(); }} />;
   if (editor?.kind === "identity") return <IdentityEditor item={editor.item} onCancel={() => setEditor(null)} onSaved={() => { setEditor(null); onChanged(); }} />;
+  if (managingOrganization) return <OrganizationManager organization={organization} onBack={() => setManagingOrganization(false)} onChanged={onChanged} />;
+  if (organizing) return (
+    <section className="space-y-5 px-5 py-6" aria-labelledby="organize-title">
+      <Button variant="ghost" size="compact" onClick={() => setOrganizing(null)}><ArrowLeft size={15} aria-hidden="true" />Back</Button>
+      <div><p className="text-[10px] font-bold uppercase tracking-[0.2em] text-brass">Organization</p><h2 id="organize-title" className="mt-2 font-display text-3xl">{organizing.title}</h2></div>
+      <FieldLabel label="Category">
+        <select className="min-h-11 w-full border border-line bg-field px-3 text-sm" value={selectedCategoryId} onChange={(event) => setSelectedCategoryId(event.target.value)}>
+          <option value="">No category</option>
+          {organization.categories.map((category) => <option key={category.id} value={category.id}>{category.name}</option>)}
+        </select>
+      </FieldLabel>
+      <fieldset className="space-y-2"><legend className="text-xs font-semibold uppercase tracking-[0.12em] text-muted-foreground">Tags</legend>
+        {organization.tags.length ? organization.tags.map((tag) => (
+          <label key={tag.id} className="flex min-h-11 items-center gap-3 border border-line px-3 text-sm">
+            <input type="checkbox" checked={selectedTagIds.includes(tag.id)} onChange={(event) => setSelectedTagIds((current) => event.target.checked ? [...current, tag.id] : current.filter((id) => id !== tag.id))} />{tag.name}
+          </label>
+        )) : <p className="text-xs text-muted-foreground">Create tags from Manage categories & tags first.</p>}
+      </fieldset>
+      <Button className="w-full" onClick={() => void saveOrganization()}><Save size={15} aria-hidden="true" />Save organization</Button>
+    </section>
+  );
 
   return (
     <section aria-label="Vault items">
       <div className="space-y-2 border-b border-line px-4 py-4">
         <SearchInput ref={searchRef} value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search vault…" />
+        <div className="grid grid-cols-3 gap-2">
+          <select aria-label="Filter by item type" className="min-h-10 border border-line bg-field px-2 text-xs" value={kindFilter} onChange={(event) => setKindFilter(event.target.value)}><option value="all">All types</option><option value="login">Logins</option><option value="secureNote">Notes</option><option value="creditCard">Cards</option><option value="identity">IDs</option></select>
+          <select aria-label="Filter by category" className="min-h-10 border border-line bg-field px-2 text-xs" value={categoryFilter} onChange={(event) => setCategoryFilter(event.target.value)}><option value="all">All categories</option><option value="none">No category</option>{organization.categories.map((category) => <option key={category.id} value={category.id}>{category.name}</option>)}</select>
+          <select aria-label="Filter by tag" className="min-h-10 border border-line bg-field px-2 text-xs" value={tagFilter} onChange={(event) => setTagFilter(event.target.value)}><option value="all">All tags</option>{organization.tags.map((tag) => <option key={tag.id} value={tag.id}>{tag.name}</option>)}</select>
+        </div>
+        <Button className="w-full" size="compact" variant="ghost" onClick={() => setManagingOrganization(true)}><Folder size={15} aria-hidden="true" />Manage categories & tags</Button>
         <div className="grid grid-cols-4 gap-2">
           <Button size="compact" aria-label="Add login" onClick={() => setEditor({ kind: "login", item: null })}><Plus size={15} aria-hidden="true" />Login</Button>
           <Button size="compact" variant="outline" aria-label="Add secure note" onClick={() => setEditor({ kind: "secureNote", item: null })}><Plus size={15} aria-hidden="true" />Note</Button>
@@ -578,12 +643,13 @@ function VaultList({ items, onChanged }: { items: PublicVaultItem[]; onChanged: 
         <ul className="divide-y divide-line">
           {filtered.map((item) => (
             <li key={item.id}>
-              <div className="group grid w-full grid-cols-[1fr_48px] items-center transition-colors hover:bg-subtle">
+              <div className="group grid w-full grid-cols-[1fr_48px_48px] items-center transition-colors hover:bg-subtle">
                 <button onClick={() => void edit(item)} className="grid cursor-pointer grid-cols-[40px_1fr] items-center gap-3 px-4 py-3 text-left outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring">
                   <span className="grid h-10 w-10 place-items-center border border-line bg-field text-brass">{itemIcon(item.kind)}</span>
                   <span className="min-w-0">
                     <span className="block truncate text-sm font-semibold text-foreground">{item.title}</span>
                     <span className="mt-0.5 block truncate text-xs text-muted-foreground">{item.subtitle}</span>
+                    {item.categoryId || item.tagIds.length ? <span className="mt-1 block truncate text-[10px] text-brass">{[organization.categories.find((entry) => entry.id === item.categoryId)?.name, ...item.tagIds.map((id) => organization.tags.find((entry) => entry.id === id)?.name)].filter(Boolean).join(" · ")}</span> : null}
                   </span>
                 </button>
                 {item.kind === "login" || item.kind === "secureNote" || item.kind === "creditCard" || item.kind === "identity" ? (
@@ -591,6 +657,7 @@ function VaultList({ items, onChanged }: { items: PublicVaultItem[]; onChanged: 
                     <Heart size={16} fill={item.favorite ? "currentColor" : "none"} aria-hidden="true" />
                   </button>
                 ) : <span aria-hidden="true" />}
+                <button type="button" onClick={() => organize(item)} aria-label={`Organize ${item.title}`} className="grid h-12 w-12 place-items-center text-muted-foreground outline-none hover:text-foreground focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"><Tag size={16} aria-hidden="true" /></button>
               </div>
             </li>
           ))}
@@ -666,12 +733,33 @@ function Generator({ onLock }: { onLock: () => void }) {
   );
 }
 
-function SettingsPanel({ onLock, onLegal }: { onLock: () => void; onLegal: (kind: LegalDocumentKind, triggerId: string) => void }) {
+function SettingsPanel({ onLock, onLegal, onVaultChanged }: { onLock: () => void; onLegal: (kind: LegalDocumentKind, triggerId: string) => void; onVaultChanged: () => void }) {
   const [settings, setSettings] = useState<PublicSecuritySettings | null>(null);
   const [autoLockMinutes, setAutoLockMinutes] = useState(5);
   const [clearClipboardSeconds, setClearClipboardSeconds] = useState(30);
   const [status, setStatus] = useState("");
   const [saving, setSaving] = useState(false);
+  const [currentMasterPassword, setCurrentMasterPassword] = useState("");
+  const [newMasterPassword, setNewMasterPassword] = useState("");
+  const [confirmMasterPassword, setConfirmMasterPassword] = useState("");
+  const [passwordStatus, setPasswordStatus] = useState("");
+  const [changingPassword, setChangingPassword] = useState(false);
+  const [restoreText, setRestoreText] = useState("");
+  const [restoreFileName, setRestoreFileName] = useState("");
+  const [restorePassword, setRestorePassword] = useState("");
+  const [restorePreview, setRestorePreview] = useState<PublicRestorePreview | null>(null);
+  const [backupStatus, setBackupStatus] = useState("");
+  const [backupBusy, setBackupBusy] = useState(false);
+  const restoreFileInputRef = useRef<HTMLInputElement>(null);
+  const [deletePassword, setDeletePassword] = useState("");
+  const [deleteConfirmation, setDeleteConfirmation] = useState("");
+  const [deleteStatus, setDeleteStatus] = useState("");
+  const [deletingVault, setDeletingVault] = useState(false);
+  const [csvPreview, setCsvPreview] = useState<PublicCsvPreview | null>(null);
+  const [csvStatus, setCsvStatus] = useState("");
+  const [csvBusy, setCsvBusy] = useState(false);
+  const csvFileInputRef = useRef<HTMLInputElement>(null);
+  const [csvExportPassword, setCsvExportPassword] = useState("");
 
   useEffect(() => {
     void send({ type: "GET_SECURITY_SETTINGS" }).then((response) => {
@@ -705,6 +793,221 @@ function SettingsPanel({ onLock, onLegal }: { onLock: () => void; onLegal: (kind
       }
     } finally {
       setSaving(false);
+    }
+  };
+
+  const changeMasterPassword = async (event: FormEvent) => {
+    event.preventDefault();
+    setPasswordStatus("");
+    if (newMasterPassword.length < 12) {
+      setPasswordStatus("New master password must be at least 12 characters.");
+      return;
+    }
+    if (newMasterPassword !== confirmMasterPassword) {
+      setPasswordStatus("New master passwords do not match.");
+      return;
+    }
+    if (currentMasterPassword === newMasterPassword) {
+      setPasswordStatus("Choose a different master password.");
+      return;
+    }
+    setChangingPassword(true);
+    try {
+      const response = await send({ type: "CHANGE_MASTER_PASSWORD", currentMasterPassword, newMasterPassword });
+      if (response.ok) {
+        setCurrentMasterPassword("");
+        setNewMasterPassword("");
+        setConfirmMasterPassword("");
+        setPasswordStatus("Master password changed. Existing vault data was re-encrypted locally.");
+      } else if (response.error === "AUTHENTICATION_FAILED") {
+        setPasswordStatus("Current master password was not accepted.");
+      } else if (response.error === "LOCKED") {
+        onLock();
+      } else {
+        setPasswordStatus("Master password could not be changed. The previous password still works.");
+      }
+    } finally {
+      setChangingPassword(false);
+    }
+  };
+
+  const exportEncryptedBackup = async () => {
+    setBackupBusy(true);
+    setBackupStatus("");
+    try {
+      const response = await send({ type: "EXPORT_ENCRYPTED_BACKUP" });
+      if (response.ok && "backup" in response) {
+        const url = URL.createObjectURL(new Blob([response.backup], { type: "application/vnd.ironkeep.vault" }));
+        const link = document.createElement("a");
+        link.href = url;
+        link.download = response.fileName;
+        link.click();
+        URL.revokeObjectURL(url);
+        setBackupStatus("Encrypted backup created.");
+      } else if (!response.ok && response.error === "LOCKED") onLock();
+      else setBackupStatus("Encrypted backup could not be created.");
+    } finally {
+      setBackupBusy(false);
+    }
+  };
+
+  const chooseRestoreFile = async (event: ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    event.target.value = "";
+    setRestorePreview(null);
+    setRestorePassword("");
+    if (!file) return;
+    if (file.size === 0 || file.size > 64 * 1024 * 1024) {
+      setBackupStatus("Backup must be between 1 byte and 64 MiB.");
+      return;
+    }
+    setBackupBusy(true);
+    try {
+      setRestoreText(new TextDecoder("utf-8", { fatal: true }).decode(await file.arrayBuffer()));
+      setRestoreFileName(file.name);
+      setBackupStatus("Enter this backup's master password to validate it locally.");
+    } catch {
+      setBackupStatus("Backup file could not be read.");
+    } finally {
+      setBackupBusy(false);
+    }
+  };
+
+  const previewRestore = async (event: FormEvent) => {
+    event.preventDefault();
+    setBackupBusy(true);
+    setBackupStatus("");
+    try {
+      const response = await send({ type: "PREVIEW_ENCRYPTED_RESTORE", serializedVault: restoreText, masterPassword: restorePassword });
+      setRestorePassword("");
+      if (response.ok && "restorePreview" in response) {
+        setRestorePreview(response.restorePreview);
+        setBackupStatus("Backup authenticated. Review details before replacing the local vault.");
+      } else if (!response.ok && response.error === "AUTHENTICATION_FAILED") {
+        setBackupStatus("Master password was not accepted for this backup.");
+      } else if (!response.ok && response.error === "LOCKED") onLock();
+      else setBackupStatus("Backup is malformed or unsupported.");
+    } finally {
+      setBackupBusy(false);
+    }
+  };
+
+  const cancelRestore = async () => {
+    await send({ type: "CANCEL_ENCRYPTED_RESTORE" });
+    setRestoreText("");
+    setRestoreFileName("");
+    setRestorePassword("");
+    setRestorePreview(null);
+    setBackupStatus("");
+  };
+
+  const confirmRestore = async () => {
+    if (!restorePreview) return;
+    setBackupBusy(true);
+    try {
+      const response = await send({ type: "CONFIRM_ENCRYPTED_RESTORE", token: restorePreview.token });
+      if (response.ok) {
+        setRestoreText("");
+        setRestoreFileName("");
+        setRestorePreview(null);
+        setBackupStatus("Backup restored. The previous encrypted vault is stored as a recovery snapshot.");
+        onVaultChanged();
+      } else if (!response.ok && response.error === "LOCKED") onLock();
+      else setBackupStatus("Restore failed. The current vault is unchanged.");
+    } finally {
+      setBackupBusy(false);
+    }
+  };
+
+  const deleteLocalVault = async (event: FormEvent) => {
+    event.preventDefault();
+    if (deleteConfirmation !== "DELETE") {
+      setDeleteStatus("Type DELETE to confirm.");
+      return;
+    }
+    setDeletingVault(true);
+    setDeleteStatus("");
+    try {
+      const response = await send({ type: "DELETE_LOCAL_VAULT", masterPassword: deletePassword, confirmation: deleteConfirmation });
+      if (response.ok) {
+        setDeletePassword("");
+        setDeleteConfirmation("");
+        onLock();
+      } else if (response.error === "AUTHENTICATION_FAILED") {
+        setDeleteStatus("Master password was not accepted. Vault was not deleted.");
+      } else {
+        setDeleteStatus("Vault could not be deleted. Local data is unchanged.");
+      }
+    } finally {
+      setDeletingVault(false);
+    }
+  };
+
+  const exportCsv = async () => {
+    setCsvBusy(true);
+    setCsvStatus("");
+    try {
+      const response = await send({ type: "EXPORT_CSV", masterPassword: csvExportPassword });
+      setCsvExportPassword("");
+      if (response.ok && "csv" in response) {
+        const url = URL.createObjectURL(new Blob([response.csv], { type: "text/csv;charset=utf-8" }));
+        const link = document.createElement("a");
+        link.href = url;
+        link.download = response.fileName;
+        link.click();
+        URL.revokeObjectURL(url);
+        setCsvStatus("Plaintext CSV exported. Store it securely and delete it when finished.");
+      } else if (!response.ok && response.error === "AUTHENTICATION_FAILED") setCsvStatus("Master password was not accepted. CSV was not exported.");
+      else if (!response.ok && response.error === "LOCKED") onLock();
+      else setCsvStatus("CSV could not be exported.");
+    } finally {
+      setCsvBusy(false);
+    }
+  };
+
+  const previewCsv = async (event: ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    event.target.value = "";
+    setCsvPreview(null);
+    if (!file) return;
+    if (file.size === 0 || file.size > 16 * 1024 * 1024) {
+      setCsvStatus("CSV must be between 1 byte and 16 MiB.");
+      return;
+    }
+    setCsvBusy(true);
+    setCsvStatus("");
+    try {
+      const response = await send({ type: "PREVIEW_CSV_IMPORT", csv: await file.text() });
+      if (response.ok && "csvPreview" in response) {
+        setCsvPreview(response.csvPreview);
+        setCsvStatus("Review the import counts and choose how to handle likely duplicates.");
+      } else if (!response.ok && response.error === "LOCKED") onLock();
+      else setCsvStatus("CSV is empty, malformed, unsupported, or contains no valid rows.");
+    } finally {
+      setCsvBusy(false);
+    }
+  };
+
+  const cancelCsv = async () => {
+    await send({ type: "CANCEL_CSV_IMPORT" });
+    setCsvPreview(null);
+    setCsvStatus("");
+  };
+
+  const confirmCsv = async (includeDuplicates: boolean) => {
+    if (!csvPreview) return;
+    setCsvBusy(true);
+    try {
+      const response = await send({ type: "CONFIRM_CSV_IMPORT", token: csvPreview.token, includeDuplicates });
+      if (response.ok) {
+        const imported = csvPreview.validRows - (includeDuplicates ? 0 : csvPreview.duplicateRows);
+        setCsvPreview(null);
+        setCsvStatus(`${imported} item${imported === 1 ? "" : "s"} imported into the encrypted vault.`);
+        onVaultChanged();
+      } else if (!response.ok && response.error === "LOCKED") onLock();
+      else setCsvStatus("CSV import failed. The previous vault is intact.");
+    } finally {
+      setCsvBusy(false);
     }
   };
 
@@ -742,24 +1045,148 @@ function SettingsPanel({ onLock, onLegal }: { onLock: () => void; onLegal: (kind
         </Button>
         <p aria-live="polite" className="min-h-5 text-xs leading-5 text-muted-foreground">{status}</p>
       </div>
-      <div className="mt-6 flex items-center justify-between border-b border-line pb-4">
-        <span className="text-sm font-semibold">Google Drive</span>
-        <span className="text-sm text-muted-foreground">Not connected</span>
+      <form className="mt-6 space-y-4 border-b border-line pb-6" onSubmit={(event) => void changeMasterPassword(event)}>
+        <div>
+          <h3 className="text-sm font-semibold">Change master password</h3>
+          <p className="mt-1 text-xs leading-5 text-muted-foreground">Rewraps and re-encrypts this local vault. Other devices and backups keep their existing password until updated separately.</p>
+        </div>
+        <PasswordInput
+          id="current-master-password"
+          label="Current master password"
+          autoComplete="current-password"
+          value={currentMasterPassword}
+          disabled={changingPassword}
+          onChange={(event) => { setCurrentMasterPassword(event.target.value); setPasswordStatus(""); }}
+        />
+        <PasswordInput
+          id="new-master-password"
+          label="New master password"
+          helperText="Use at least 12 characters. Ironkeep cannot recover it."
+          autoComplete="new-password"
+          value={newMasterPassword}
+          disabled={changingPassword}
+          onChange={(event) => { setNewMasterPassword(event.target.value); setPasswordStatus(""); }}
+        />
+        <PasswordInput
+          id="confirm-master-password"
+          label="Confirm new master password"
+          autoComplete="new-password"
+          value={confirmMasterPassword}
+          disabled={changingPassword}
+          onChange={(event) => { setConfirmMasterPassword(event.target.value); setPasswordStatus(""); }}
+        />
+        <Button className="w-full" type="submit" disabled={changingPassword || !currentMasterPassword || !newMasterPassword || !confirmMasterPassword}>
+          <KeyRound size={15} aria-hidden="true" />{changingPassword ? "Changing…" : "Change master password"}
+        </Button>
+        <p aria-live="polite" className="min-h-5 text-xs leading-5 text-muted-foreground">{passwordStatus}</p>
+      </form>
+      <div className="mt-6 space-y-4 border-b border-line pb-6">
+        <div>
+          <h3 className="text-sm font-semibold">Encrypted backups</h3>
+          <p className="mt-1 text-xs leading-5 text-muted-foreground">Export or restore a local encrypted .ikv snapshot. Restore authenticates before showing a preview.</p>
+        </div>
+        <div className="grid grid-cols-2 gap-2">
+          <Button type="button" variant="outline" disabled={backupBusy} onClick={() => void exportEncryptedBackup()}>
+            <Save size={15} aria-hidden="true" />Export
+          </Button>
+          <Button type="button" variant="outline" disabled={backupBusy} onClick={() => restoreFileInputRef.current?.click()}>
+            <FileText size={15} aria-hidden="true" />Restore
+          </Button>
+        </div>
+        <input ref={restoreFileInputRef} className="sr-only" type="file" accept=".ikv,application/json,application/octet-stream" onChange={(event) => void chooseRestoreFile(event)} />
+        {restoreText && !restorePreview ? (
+          <form className="space-y-3 border border-line p-3" onSubmit={(event) => void previewRestore(event)}>
+            <p className="truncate text-xs font-semibold">{restoreFileName}</p>
+            <PasswordInput
+              id="restore-master-password"
+              label="Backup master password"
+              autoComplete="current-password"
+              value={restorePassword}
+              disabled={backupBusy}
+              onChange={(event) => setRestorePassword(event.target.value)}
+            />
+            <div className="grid grid-cols-2 gap-2">
+              <Button type="submit" disabled={backupBusy || !restorePassword}>Validate</Button>
+              <Button type="button" variant="ghost" onClick={() => void cancelRestore()}>Cancel</Button>
+            </div>
+          </form>
+        ) : null}
+        {restorePreview ? (
+          <div className="space-y-3 border border-line p-3 text-xs leading-5">
+            <p className="font-semibold">Authenticated restore preview</p>
+            <p>Revision {restorePreview.revision} · {restorePreview.itemCount} items</p>
+            <p>{new Date(restorePreview.updatedAt).toLocaleString()}</p>
+            <p className="break-all text-muted-foreground">SHA-256 {restorePreview.checksum}</p>
+            <p>The current encrypted vault will be saved as a recovery snapshot first.</p>
+            <div className="grid grid-cols-2 gap-2">
+              <Button type="button" variant="danger" disabled={backupBusy} onClick={() => void confirmRestore()}>Restore</Button>
+              <Button type="button" variant="ghost" disabled={backupBusy} onClick={() => void cancelRestore()}>Cancel</Button>
+            </div>
+          </div>
+        ) : null}
+        <p aria-live="polite" className="min-h-5 text-xs leading-5 text-muted-foreground">{backupStatus}</p>
       </div>
-      <Button className="mt-4 w-full" variant="outline"><ShieldCheck size={16} aria-hidden="true" />Connect Google Drive</Button>
+      <div className="mt-6 space-y-4 border-b border-line pb-6">
+        <div>
+          <h3 className="text-sm font-semibold">CSV transfer</h3>
+          <p className="mt-1 text-xs leading-5 text-muted-foreground">Imports Ironkeep CSV or common browser login CSV. CSV is plaintext and can expose secrets.</p>
+        </div>
+        <div className="grid grid-cols-2 gap-2">
+          <Button type="button" variant="outline" disabled={csvBusy || !csvExportPassword} onClick={() => void exportCsv()}>Export CSV</Button>
+          <Button type="button" variant="outline" disabled={csvBusy} onClick={() => csvFileInputRef.current?.click()}>Import CSV</Button>
+        </div>
+        <PasswordInput id="csv-export-password" label="Master password for export" autoComplete="current-password" value={csvExportPassword} disabled={csvBusy} onChange={(event) => { setCsvExportPassword(event.target.value); setCsvStatus(""); }} />
+        <input ref={csvFileInputRef} className="sr-only" type="file" accept=".csv,text/csv" onChange={(event) => void previewCsv(event)} />
+        {csvPreview ? (
+          <div className="space-y-3 border border-line p-3 text-xs leading-5">
+            <p className="font-semibold">CSV import preview</p>
+            <p>{csvPreview.totalRows} rows · {csvPreview.validRows} valid · {csvPreview.duplicateRows} likely duplicates · {csvPreview.invalidRows} invalid</p>
+            <Button className="w-full" type="button" disabled={csvBusy} onClick={() => void confirmCsv(false)}>Import and skip duplicates</Button>
+            {csvPreview.duplicateRows > 0 ? <Button className="w-full" type="button" variant="outline" disabled={csvBusy} onClick={() => void confirmCsv(true)}>Import all rows</Button> : null}
+            <Button className="w-full" type="button" variant="ghost" disabled={csvBusy} onClick={() => void cancelCsv()}>Cancel</Button>
+          </div>
+        ) : null}
+        <p aria-live="polite" className="min-h-5 text-xs leading-5 text-muted-foreground">{csvStatus}</p>
+      </div>
       <div className="mt-6">
         <LegalLinks idPrefix="settings" onOpen={onLegal} />
       </div>
+      <form className="mt-6 space-y-4 border-t border-danger/60 pt-5" onSubmit={(event) => void deleteLocalVault(event)}>
+        <div>
+          <h3 className="text-sm font-semibold text-danger">Danger zone</h3>
+          <p className="mt-1 text-xs leading-5 text-muted-foreground">Permanently deletes this browser's encrypted vault and local recovery snapshot. Export a backup first if needed.</p>
+        </div>
+        <PasswordInput
+          id="delete-vault-password"
+          label="Master password"
+          autoComplete="current-password"
+          value={deletePassword}
+          disabled={deletingVault}
+          onChange={(event) => { setDeletePassword(event.target.value); setDeleteStatus(""); }}
+        />
+        <FieldLabel label="Type DELETE">
+          <Input value={deleteConfirmation} disabled={deletingVault} onChange={(event) => { setDeleteConfirmation(event.target.value); setDeleteStatus(""); }} />
+        </FieldLabel>
+        <Button className="w-full" type="submit" variant="danger" disabled={deletingVault || !deletePassword || deleteConfirmation !== "DELETE"}>
+          <Trash2 size={15} aria-hidden="true" />{deletingVault ? "Deleting…" : "Delete local vault"}
+        </Button>
+        <p aria-live="polite" className="min-h-5 text-xs leading-5 text-danger">{deleteStatus}</p>
+      </form>
     </section>
   );
 }
 
 function UnlockedView({ onLock, onLegal }: { onLock: () => void; onLegal: (kind: LegalDocumentKind, triggerId: string) => void }) {
   const [items, setItems] = useState<PublicVaultItem[]>([]);
+  const [organization, setOrganization] = useState<PublicOrganization>({ categories: [], tags: [] });
   const [refreshKey, setRefreshKey] = useState(0);
   useEffect(() => {
     void send({ type: "LIST_ITEMS" }).then((response) => {
       if (response.ok && "items" in response) setItems(response.items);
+      else if (!response.ok && response.error === "LOCKED") onLock();
+    });
+    void send({ type: "GET_ORGANIZATION" }).then((response) => {
+      if (response.ok && "organization" in response) setOrganization(response.organization);
       else if (!response.ok && response.error === "LOCKED") onLock();
     });
   }, [onLock, refreshKey]);
@@ -805,9 +1232,9 @@ function UnlockedView({ onLock, onLegal }: { onLock: () => void; onLegal: (kind:
           <TabsTrigger value="generator"><RefreshCw className="mr-1 inline" size={14} aria-hidden="true" />Generate</TabsTrigger>
           <TabsTrigger value="settings"><Settings className="mr-1 inline" size={14} aria-hidden="true" />Settings</TabsTrigger>
         </TabsList>
-        <TabsContent value="vault"><SiteMatches refreshKey={refreshKey} /><VaultList items={items} onChanged={() => setRefreshKey((value) => value + 1)} /></TabsContent>
+        <TabsContent value="vault"><SiteMatches refreshKey={refreshKey} /><VaultList items={items} organization={organization} onChanged={() => setRefreshKey((value) => value + 1)} /></TabsContent>
         <TabsContent value="generator"><Generator onLock={onLock} /></TabsContent>
-        <TabsContent value="settings"><SettingsPanel onLock={onLock} onLegal={onLegal} /></TabsContent>
+        <TabsContent value="settings"><SettingsPanel onLock={onLock} onLegal={onLegal} onVaultChanged={() => setRefreshKey((value) => value + 1)} /></TabsContent>
       </Tabs>
     </main>
   );
@@ -822,6 +1249,7 @@ export function App() {
     legalTriggerId.current = triggerId;
     setLegalDocument(kind);
   }, []);
+
   const closeLegal = useCallback(() => {
     const triggerId = legalTriggerId.current;
     setLegalDocument(null);
@@ -838,4 +1266,30 @@ export function App() {
   if (view === "loading") return <LoadingView />;
   if (view === "empty" || view === "locked") return <GateView mode={view} onOpen={() => setView("unlocked")} onLegal={openLegal} />;
   return <UnlockedView onLock={showLocked} onLegal={openLegal} />;
+}
+
+function OrganizationManager({ organization, onBack, onChanged }: { organization: PublicOrganization; onBack: () => void; onChanged: () => void }) {
+  const [categoryName, setCategoryName] = useState("");
+  const [tagName, setTagName] = useState("");
+  const [status, setStatus] = useState("");
+  const mutate = async (request: ExtensionRequest) => {
+    const response = await send(request);
+    if (response.ok) { setStatus("Saved."); onChanged(); }
+    else setStatus("Could not save. Names must be unique and 1–64 characters.");
+  };
+  return <section className="space-y-5 px-5 py-6" aria-labelledby="organization-title">
+    <Button variant="ghost" size="compact" onClick={onBack}><ArrowLeft size={15} aria-hidden="true" />Back</Button>
+    <div><p className="text-[10px] font-bold uppercase tracking-[0.2em] text-brass">Vault structure</p><h2 id="organization-title" className="mt-2 font-display text-3xl">Categories & tags</h2></div>
+    <form className="flex gap-2" onSubmit={(event) => { event.preventDefault(); if (categoryName.trim()) void mutate({ type: "CREATE_CATEGORY", name: categoryName }).then(() => setCategoryName("")); }}><Input aria-label="New category name" placeholder="New category" value={categoryName} onChange={(event) => setCategoryName(event.target.value)} /><Button type="submit" size="compact">Add</Button></form>
+    <div className="space-y-2">{organization.categories.map((category) => <OrganizationRow key={category.id} value={category.name} onRename={(name) => mutate({ type: "RENAME_CATEGORY", categoryId: category.id, name })} onDelete={() => mutate({ type: "DELETE_CATEGORY", categoryId: category.id })} />)}</div>
+    <form className="flex gap-2 border-t border-line pt-5" onSubmit={(event) => { event.preventDefault(); if (tagName.trim()) void mutate({ type: "CREATE_TAG", name: tagName }).then(() => setTagName("")); }}><Input aria-label="New tag name" placeholder="New tag" value={tagName} onChange={(event) => setTagName(event.target.value)} /><Button type="submit" size="compact">Add</Button></form>
+    <div className="space-y-2">{organization.tags.map((tag) => <OrganizationRow key={tag.id} value={tag.name} onRename={(name) => mutate({ type: "RENAME_TAG", tagId: tag.id, name })} onDelete={() => mutate({ type: "DELETE_TAG", tagId: tag.id })} />)}</div>
+    <p aria-live="polite" className="text-xs text-muted-foreground">{status}</p>
+  </section>;
+}
+
+function OrganizationRow({ value, onRename, onDelete }: { value: string; onRename: (name: string) => Promise<void>; onDelete: () => Promise<void> }) {
+  const [name, setName] = useState(value);
+  useEffect(() => setName(value), [value]);
+  return <div className="grid grid-cols-[1fr_auto_auto] gap-2"><Input aria-label={`Rename ${value}`} value={name} onChange={(event) => setName(event.target.value)} /><Button type="button" size="compact" variant="outline" onClick={() => void onRename(name)}>Save</Button><Button type="button" size="icon" variant="ghost" aria-label={`Delete ${value}`} onClick={() => { if (window.confirm(`Delete ${value}? Item data stays intact, but this assignment is removed.`)) void onDelete(); }}><Trash2 size={15} aria-hidden="true" /></Button></div>;
 }

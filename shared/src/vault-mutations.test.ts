@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { createEmptyVault } from "./models.js";
-import { addCreditCard, addIdentity, addLogin, addSecureNote, deleteCreditCard, deleteIdentity, deleteLogin, deleteSecureNote, editCreditCard, editIdentity, editLogin, editSecureNote, findLikelyCreditCardDuplicates, findLikelyIdentityDuplicates, findLikelyLoginDuplicates, findLikelySecureNoteDuplicates, toggleCreditCardFavorite, toggleIdentityFavorite, toggleLoginFavorite, toggleSecureNoteFavorite, updateSecuritySettings } from "./vault-mutations.js";
+import { addCategory, addCreditCard, addIdentity, addLogin, addSecureNote, addTag, deleteCategory, deleteCreditCard, deleteIdentity, deleteLogin, deleteSecureNote, deleteTag, editCreditCard, editIdentity, editLogin, editSecureNote, findLikelyCreditCardDuplicates, findLikelyIdentityDuplicates, findLikelyLoginDuplicates, findLikelySecureNoteDuplicates, setItemOrganization, toggleCreditCardFavorite, toggleIdentityFavorite, toggleLoginFavorite, toggleSecureNoteFavorite, updateSecuritySettings } from "./vault-mutations.js";
 
 const fields = {
   title: "Example",
@@ -11,6 +11,20 @@ const fields = {
 };
 
 describe("login mutations", () => {
+  it("manages categories, tags, and item organization without dangling references", () => {
+    const payload = addLogin(createEmptyVault("Test", "device-a"), fields, { deviceId: "device-a", itemId: "login-a" });
+    const categorized = addCategory(payload, "Finance", { deviceId: "device-a" });
+    const category = categorized.categories.find((entry) => entry.name === "Finance")!;
+    const tagged = addTag(categorized, "Important", { deviceId: "device-a" });
+    const tag = tagged.tags.find((entry) => entry.name === "Important")!;
+    const organized = setItemOrganization(tagged, "login-a", category.id, [tag.id], { deviceId: "device-a" });
+    expect(organized.items[0]).toMatchObject({ categoryId: category.id, tagIds: [tag.id] });
+
+    const withoutCategory = deleteCategory(organized, category.id, { deviceId: "device-a" });
+    const withoutTag = deleteTag(withoutCategory, tag.id, { deviceId: "device-a" });
+    expect(withoutTag.items[0]).toMatchObject({ tagIds: [] });
+    expect(withoutTag.items[0]?.categoryId).toBeUndefined();
+  });
   it("adds, edits, favorites, and tombstones a login with monotonic revisions and timestamps", () => {
     const empty = createEmptyVault("Test", "device-a", new Date("2026-01-01T00:00:00.000Z"));
     const added = addLogin(empty, fields, { deviceId: "device-a", now: new Date("2026-01-02T00:00:00.000Z"), itemId: "login-one" });

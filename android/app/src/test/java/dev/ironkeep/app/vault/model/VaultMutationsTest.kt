@@ -2,11 +2,33 @@ package dev.ironkeep.app.vault.model
 
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import java.time.Instant
 
 class VaultMutationsTest {
+    @Test
+    fun categoriesAndTagsDoNotLeaveDanglingItemReferences() {
+        val login = VaultMutations.addLogin(
+            VaultPayload.empty("Test", "device-a"),
+            LoginFields("Example", "person@example.com", "secret", emptyList(), emptyList()),
+            "device-a",
+            itemId = "login-a",
+        )
+        val withCategory = VaultMutations.addCategory(login, "Finance", "device-a")
+        val category = withCategory.categories.first { it.name == "Finance" }
+        val withTag = VaultMutations.addTag(withCategory, "Important", "device-a")
+        val tag = withTag.tags.first { it.name == "Important" }
+        val organized = VaultMutations.setItemOrganization(withTag, "login-a", category.id, listOf(tag.id), "device-a")
+        assertEquals(category.id, organized.items.single().categoryId)
+        assertEquals(listOf(tag.id), organized.items.single().tagIds)
+
+        val cleaned = VaultMutations.deleteTag(VaultMutations.deleteCategory(organized, category.id, "device-a"), tag.id, "device-a")
+        assertNull(cleaned.items.single().categoryId)
+        assertTrue(cleaned.items.single().tagIds.isEmpty())
+    }
+
     private val fields = LoginFields(
         title = "Example",
         username = "person@example.com",

@@ -73,7 +73,11 @@ class IronkeepAutofillService : AutofillService() {
             callback.onFailure("Ironkeep could not safely identify a matching username, password, and target.")
             return
         }
-        if (session != null && AutofillSavePlanner.isUnchanged(session.payload, candidate)) {
+        val unchanged = session != null && when (candidate) {
+            is AutofillCredentialCandidate -> AutofillSavePlanner.isUnchanged(session.payload, candidate)
+            is AutofillCreditCardCandidate -> AutofillCreditCardSavePlanner.isUnchanged(session.payload, candidate)
+        }
+        if (unchanged) {
             candidate.clear()
             callback.onSuccess()
             return
@@ -101,7 +105,7 @@ class IronkeepAutofillService : AutofillService() {
         } else 0
         val authentication = PendingIntent.getActivity(this, requestId, intent, flags).intentSender
         return FillResponse.Builder().apply {
-            fields.loginSaveInfoOrNull()?.let(::setSaveInfo)
+            fields.saveInfoOrNull()?.let(::setSaveInfo)
             setAuthentication(fields.allIds.toTypedArray(), authentication, presentation)
         }.build()
     }
@@ -119,7 +123,7 @@ class IronkeepAutofillService : AutofillService() {
 @Suppress("DEPRECATION") // Dataset RemoteViews overloads are required for the API 28 compatibility path.
 internal fun buildUnlockedFillResponse(context: Context, fields: DetectedFields, payload: VaultPayload): FillResponse? {
     val target = requireNotNull(fields.target())
-    val saveInfo = fields.loginSaveInfoOrNull()
+    val saveInfo = fields.saveInfoOrNull()
     val response = FillResponse.Builder().apply { saveInfo?.let(::setSaveInfo) }
     var hasResponseContent = saveInfo != null
     generatedPasswordDataset(context, fields, payload.settings.generator)?.let { dataset ->
@@ -243,6 +247,7 @@ internal class DetectedFields {
     private val currentPasswords = linkedMapOf<AutofillId, CharArray>()
     private val newPasswords = linkedMapOf<AutofillId, CharArray>()
     private val cardFields = linkedMapOf<AutofillFieldKind, MutableList<DetectedAutofillField>>()
+    private val cardValues = linkedMapOf<AutofillFieldKind, CharArray>()
     var webDomain: String? = null
     var webScheme: String? = null
     var packageName: String? = null
@@ -261,11 +266,21 @@ internal class DetectedFields {
         return AutofillTarget(androidPackageName = appPackage)
     }
 
-    fun loginSaveInfoOrNull(): SaveInfo? {
-        if (savePasswordIds.isEmpty()) return null
-        val required = arrayOf(savePasswordIds.first())
-        val optional = (usernameIds + savePasswordIds.drop(1)).distinct().toTypedArray()
-        return SaveInfo.Builder(SaveInfo.SAVE_DATA_TYPE_USERNAME or SaveInfo.SAVE_DATA_TYPE_PASSWORD, required)
+    fun saveInfoOrNull(): SaveInfo? {
+        val isLogin = savePasswordIds.isNotEmpty()
+        val required = if (isLogin) {
+            arrayOf(savePasswordIds.first())
+        } else {
+            val numberId = cardFields[AutofillFieldKind.CREDIT_CARD_NUMBER]?.firstOrNull()?.id ?: return null
+            arrayOf(numberId)
+        }
+        val optional = if (isLogin) {
+            (usernameIds + savePasswordIds.drop(1)).distinct().toTypedArray()
+        } else {
+            creditCardIds.filterNot { it == required.first() }.toTypedArray()
+        }
+        val dataType = if (isLogin) SaveInfo.SAVE_DATA_TYPE_USERNAME or SaveInfo.SAVE_DATA_TYPE_PASSWORD else SaveInfo.SAVE_DATA_TYPE_CREDIT_CARD
+        return SaveInfo.Builder(dataType, required)
             .apply {
                 if (optional.isNotEmpty()) setOptionalIds(optional)
                 setDescription("Choose save or update in Ironkeep.")
@@ -277,12 +292,30 @@ internal class DetectedFields {
             .build()
     }
 
-    fun candidate(vaultId: String, title: String, target: AutofillTarget): AutofillCredentialCandidate? {
+    fun candidate(vaultId: String, title: String, target: AutofillTarget): AutofillSaveCandidate? {
         val passwords = newPasswords.ifEmpty { currentPasswords }.values.filter { it.isNotEmpty() }
-        val password = passwords.lastOrNull() ?: return null
-        if (passwords.any { !it.contentEquals(password) }) return null
-        val username = usernames.values.lastOrNull { it.isNotBlank() }.orEmpty()
-        return AutofillCredentialCandidate(vaultId, title, username, password, target)
+        val password = passwords.lastOrNull()
+        if (password != null) {
+            if (passwords.any { !it.contentEquals(password) }) return null
+            val username = usernames.values.lastOrNull { it.isNotBlank() }.orEmpty()
+            return AutofillCredentialCandidate(vaultId, title, username, password, target)
+        }
+
+        val cardholder = cardValue(AutofillFieldKind.CREDIT_CARD_NAME)?.trim().orEmpty()
+        val number = cardValue(AutofillFieldKind.CREDIT_CARD_NUMBER)?.filter(Char::isDigit).orEmpty()
+        val code = cardValue(AutofillFieldKind.CREDIT_CARD_SECURITY_CODE)?.trim().orEmpty()
+        val expiry = expiry() ?: return null
+        if (cardholder.isEmpty() || !number.matches(Regex("\\d{12,19}")) || !code.matches(Regex("\\d{3,4}"))) return null
+        return AutofillCreditCardCandidate(
+            vaultId,
+            "$title card",
+            cardholder.toCharArray(),
+            number.toCharArray(),
+            expiry.first,
+            expiry.second,
+            code.toCharArray(),
+            target,
+        )
     }
 
     fun add(
@@ -321,6 +354,7 @@ internal class DetectedFields {
             -> if (autofillType == View.AUTOFILL_TYPE_TEXT || autofillType == View.AUTOFILL_TYPE_LIST || autofillType == View.AUTOFILL_TYPE_DATE) {
                 val fields = cardFields.getOrPut(kind) { mutableListOf() }
                 if (fields.none { it.id == id }) fields += DetectedAutofillField(id, autofillType, options, maxTextLength)
+                value?.toChars()?.let { replacement -> cardValues.put(kind, replacement)?.fill('\u0000') }
             }
         }
     }
@@ -328,9 +362,30 @@ internal class DetectedFields {
     fun clearSensitive() {
         currentPasswords.values.forEach { it.fill('\u0000') }
         newPasswords.values.forEach { it.fill('\u0000') }
+        cardValues.values.forEach { it.fill('\u0000') }
         currentPasswords.clear()
         newPasswords.clear()
+        cardValues.clear()
     }
+
+    private fun cardValue(kind: AutofillFieldKind): String? = cardValues[kind]?.concatToString()
+
+    private fun expiry(): Pair<Int, Int>? {
+        cardValue(AutofillFieldKind.CREDIT_CARD_EXPIRATION_DATE)?.let { value ->
+            val iso = Regex("^(\\d{4})-(\\d{1,2})$").matchEntire(value.trim())
+            if (iso != null) return validExpiry(iso.groupValues[2].toInt(), iso.groupValues[1].toInt())
+            val separated = Regex("^(\\d{1,2})\\D+(\\d{2}|\\d{4})$").matchEntire(value.trim())
+            if (separated != null) {
+                val year = separated.groupValues[2].toInt().let { if (it < 100) 2000 + it else it }
+                return validExpiry(separated.groupValues[1].toInt(), year)
+            }
+        }
+        val month = cardValue(AutofillFieldKind.CREDIT_CARD_EXPIRATION_MONTH)?.filter(Char::isDigit)?.toIntOrNull() ?: return null
+        val year = cardValue(AutofillFieldKind.CREDIT_CARD_EXPIRATION_YEAR)?.filter(Char::isDigit)?.toIntOrNull()?.let { if (it < 100) 2000 + it else it } ?: return null
+        return validExpiry(month, year)
+    }
+
+    private fun validExpiry(month: Int, year: Int): Pair<Int, Int>? = (month to year).takeIf { month in 1..12 && year in 2000..9999 }
 
     private fun CharSequence.toChars(): CharArray = CharArray(length) { index -> this[index] }
 
@@ -357,14 +412,24 @@ internal class FieldCollector {
             val htmlLabels = node.htmlInfo?.attributes.orEmpty().flatMap { listOf(it.first, it.second) }
             val labels = node.autofillHints.orEmpty().toList() + htmlLabels + listOf(node.hint, node.idEntry)
             val kind = classifyAutofillField(*labels.toTypedArray()) ?: kindFromInputType(node.inputType)
-            val value = node.autofillValue?.takeIf(AutofillValue::isText)?.textValue
+            val options = node.autofillOptions.orEmpty().map(CharSequence::toString)
+            val autofillValue = node.autofillValue
+            val value: CharSequence? = when {
+                autofillValue?.isText == true -> autofillValue.textValue
+                autofillValue?.isList == true -> options.getOrNull(autofillValue.listValue)
+                autofillValue?.isDate == true -> runCatching {
+                    val date = java.time.Instant.ofEpochMilli(autofillValue.dateValue).atZone(ZoneOffset.UTC)
+                    "${date.monthValue.toString().padStart(2, '0')}/${date.year}"
+                }.getOrNull()
+                else -> null
+            }
             if (kind != null) {
                 result.add(
                     kind = kind,
                     id = id,
                     value = value,
                     autofillType = node.autofillType,
-                    options = node.autofillOptions.orEmpty().map(CharSequence::toString),
+                    options = options,
                     maxTextLength = node.maxTextLength,
                 )
             }
